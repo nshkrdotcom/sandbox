@@ -28,6 +28,9 @@ defmodule Sandbox.Application do
       Sandbox.Manager,
       Sandbox.ModuleVersionManager,
 
+      # Process isolation infrastructure (Phase 2)
+      Sandbox.ProcessIsolator,
+
       # Resource monitoring and security
       {Sandbox.ResourceMonitor, []},
       {Sandbox.SecurityController, []},

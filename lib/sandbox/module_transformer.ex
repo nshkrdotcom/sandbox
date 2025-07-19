@@ -34,7 +34,9 @@ defmodule Sandbox.ModuleTransformer do
   def transform_source(source_code, sandbox_id, opts \\ []) do
     preserve_stdlib = Keyword.get(opts, :preserve_stdlib, true)
     sanitized_id = sanitize_sandbox_id(sandbox_id)
-    namespace_prefix = Keyword.get(opts, :namespace_prefix, "Sandbox_#{sanitized_id}")
+    # Create globally unique namespace to prevent conflicts
+    unique_namespace = create_unique_namespace(sanitized_id)
+    namespace_prefix = Keyword.get(opts, :namespace_prefix, unique_namespace)
 
     try do
       # Parse the source code into AST
@@ -72,7 +74,9 @@ defmodule Sandbox.ModuleTransformer do
   """
   def transform_module_name(module_name, sandbox_id, opts \\ []) do
     sanitized_id = sanitize_sandbox_id(sandbox_id)
-    namespace_prefix = Keyword.get(opts, :namespace_prefix, "Sandbox_#{sanitized_id}")
+    # Create globally unique namespace to prevent conflicts
+    unique_namespace = create_unique_namespace(sanitized_id)
+    namespace_prefix = Keyword.get(opts, :namespace_prefix, unique_namespace)
     preserve_stdlib = Keyword.get(opts, :preserve_stdlib, true)
 
     module_str = to_string(module_name)
@@ -396,5 +400,33 @@ defmodule Sandbox.ModuleTransformer do
   defp ensure_starts_with_letter(string) do
     # Already starts with uppercase letter or underscore, keep as is
     string
+  end
+
+  @doc """
+  Creates a globally unique namespace for a sandbox to prevent module conflicts.
+  
+  This function creates a namespace that is unique across all sandboxes and
+  test runs by incorporating a timestamp and unique identifier.
+  
+  ## Parameters
+  - `sanitized_id`: The sanitized sandbox ID
+  
+  ## Returns
+  - A globally unique namespace string
+  
+  ## Examples
+      iex> namespace = ModuleTransformer.create_unique_namespace("Test123")
+      iex> String.starts_with?(namespace, "Sandbox_Test123_")
+      true
+  """
+  def create_unique_namespace(sanitized_id) do
+    # Use a combination of timestamp and unique integer for global uniqueness
+    timestamp = System.system_time(:millisecond)
+    unique_id = System.unique_integer([:positive])
+    
+    # Create a shorter, but still unique suffix
+    unique_suffix = :erlang.phash2({timestamp, unique_id, self()}) |> abs()
+    
+    "Sandbox_#{sanitized_id}_#{unique_suffix}"
   end
 end

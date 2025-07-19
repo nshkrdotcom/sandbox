@@ -16,6 +16,7 @@ defmodule Sandbox.Manager do
   alias Sandbox.IsolatedCompiler
   alias Sandbox.ModuleVersionManager
   alias Sandbox.ModuleTransformer
+  alias Sandbox.ProcessIsolator
   alias Sandbox.Models.SandboxState
 
   # Public API
@@ -40,6 +41,9 @@ defmodule Sandbox.Manager do
     * `:compile_timeout` - Compilation timeout in milliseconds (default: 30000)
     * `:resource_limits` - Resource limits map (default: medium profile)
     * `:security_profile` - Security profile (:high, :medium, :low, default: :medium)
+    * `:isolation_mode` - Isolation mode (:process, :module, :hybrid, default: :hybrid)
+    * `:isolation_level` - For process isolation (:strict, :medium, :relaxed, default: :medium)
+    * `:communication_mode` - Inter-sandbox communication (:none, :message_passing, :shared_ets, default: :message_passing)
     * `:auto_reload` - Enable automatic file watching (default: false)
     * `:state_migration_handler` - Custom state migration function
 
@@ -1092,7 +1096,136 @@ defmodule Sandbox.Manager do
       config: config
     } = sandbox_state
 
-    # Start sandbox application with enhanced error handling
+    # Check isolation mode
+    isolation_mode = Map.get(config, :isolation_mode, :hybrid)
+    
+    case isolation_mode do
+      :process ->
+        # Pure process isolation (Phase 2)
+        start_with_process_isolation(sandbox_state)
+        
+      :module ->
+        # Pure module transformation (Phase 1)
+        start_with_module_transformation(sandbox_state)
+        
+      :hybrid ->
+        # Combined approach (Phase 1 + Phase 2) - default
+        start_with_hybrid_isolation(sandbox_state)
+    end
+  end
+
+  defp start_with_process_isolation(sandbox_state) do
+    %SandboxState{
+      id: sandbox_id,
+      app_name: app_name,
+      supervisor_module: supervisor_module,
+      config: config
+    } = sandbox_state
+
+    # First apply module transformation if sandbox_path is provided
+    case Map.get(config, :sandbox_path) do
+      nil ->
+        # No sandbox path, use pure process isolation without module compilation
+        create_pure_process_isolation(sandbox_state)
+        
+      _sandbox_path ->
+        # Apply module transformation first, then process isolation
+        case start_sandbox_application(sandbox_id, app_name, supervisor_module, Map.to_list(config)) do
+          {:ok, app_pid, supervisor_pid, full_opts} ->
+            # Also create isolated process context for additional isolation
+            isolation_opts = [
+              isolation_level: Map.get(config, :isolation_level, :medium),
+              communication_mode: Map.get(config, :communication_mode, :message_passing),
+              resource_limits: Map.get(config, :resource_limits, %{})
+            ]
+
+            # Create additional process isolation context
+            isolation_result = ProcessIsolator.create_isolated_context(
+              "#{sandbox_id}_process_wrapper",
+              supervisor_module,
+              isolation_opts
+            )
+
+            # Set up comprehensive process monitoring
+            monitor_ref = Process.monitor(supervisor_pid)
+
+            # Extract compile info to track sandbox directory for cleanup
+            compile_info = Keyword.get(full_opts, :compile_info, %{})
+            sandbox_path = Keyword.get(full_opts, :sandbox_path)
+            
+            # Build list of artifacts including the unique sandbox directory
+            artifacts =
+              if sandbox_path && String.starts_with?(sandbox_path, System.tmp_dir!()) do
+                [sandbox_path | Map.get(compile_info, :beam_files, [])]
+              else
+                Map.get(compile_info, :beam_files, [])
+              end
+
+            # Update sandbox state with process isolation information
+            updated_state =
+              sandbox_state
+              |> SandboxState.update_processes(app_pid, supervisor_pid, monitor_ref)
+              |> SandboxState.update_status(:running)
+              |> Map.put(:compilation_artifacts, artifacts)
+              |> Map.put(:isolation_mode, :process)
+              |> Map.put(:isolation_context, case isolation_result do
+                {:ok, context} -> context
+                {:error, _} -> nil
+              end)
+
+            {:ok, updated_state, monitor_ref}
+
+          {:error, reason} ->
+            SandboxState.update_status(sandbox_state, :error)
+            {:error, {:process_isolation_failed, reason}}
+        end
+    end
+  end
+
+  defp create_pure_process_isolation(sandbox_state) do
+    %SandboxState{
+      id: sandbox_id,
+      supervisor_module: supervisor_module,
+      config: config
+    } = sandbox_state
+
+    # Create isolated process context without module compilation
+    isolation_opts = [
+      isolation_level: Map.get(config, :isolation_level, :medium),
+      communication_mode: Map.get(config, :communication_mode, :message_passing),
+      resource_limits: Map.get(config, :resource_limits, %{})
+    ]
+
+    case ProcessIsolator.create_isolated_context(sandbox_id, supervisor_module, isolation_opts) do
+      {:ok, context} ->
+        # Monitor the isolated process
+        monitor_ref = Process.monitor(context.isolated_pid)
+
+        # Update sandbox state with isolation information
+        updated_state =
+          sandbox_state
+          |> SandboxState.update_processes(nil, context.isolated_pid, monitor_ref)
+          |> SandboxState.update_status(:running)
+          |> Map.put(:isolation_context, context)
+          |> Map.put(:isolation_mode, :process)
+
+        {:ok, updated_state, monitor_ref}
+
+      {:error, reason} ->
+        SandboxState.update_status(sandbox_state, :error)
+        {:error, {:process_isolation_failed, reason}}
+    end
+  end
+
+  defp start_with_module_transformation(sandbox_state) do
+    %SandboxState{
+      id: sandbox_id,
+      app_name: app_name,
+      supervisor_module: supervisor_module,
+      config: config
+    } = sandbox_state
+
+    # Start sandbox application with module transformation (existing logic)
     case start_sandbox_application(sandbox_id, app_name, supervisor_module, Map.to_list(config)) do
       {:ok, app_pid, supervisor_pid, full_opts} ->
         # Set up comprehensive process monitoring
@@ -1116,6 +1249,68 @@ defmodule Sandbox.Manager do
           |> SandboxState.update_processes(app_pid, supervisor_pid, monitor_ref)
           |> SandboxState.update_status(:running)
           |> Map.put(:compilation_artifacts, artifacts)
+          |> Map.put(:isolation_mode, :module)
+
+        {:ok, updated_state, monitor_ref}
+
+      {:error, reason} ->
+        # Update status to error
+        _error_state = SandboxState.update_status(sandbox_state, :error)
+        {:error, reason}
+    end
+  end
+
+  defp start_with_hybrid_isolation(sandbox_state) do
+    %SandboxState{
+      id: sandbox_id,
+      app_name: app_name,
+      supervisor_module: supervisor_module,
+      config: config
+    } = sandbox_state
+
+    # First apply module transformation, then process isolation
+    case start_sandbox_application(sandbox_id, app_name, supervisor_module, Map.to_list(config)) do
+      {:ok, app_pid, supervisor_pid, full_opts} ->
+        # Also create process isolation context for additional isolation
+        isolation_opts = [
+          isolation_level: Map.get(config, :isolation_level, :relaxed),  # Relaxed since module transformation handles conflicts
+          communication_mode: Map.get(config, :communication_mode, :message_passing),
+          resource_limits: Map.get(config, :resource_limits, %{})
+        ]
+
+        # Optional: Create additional process isolation
+        isolation_result = ProcessIsolator.create_isolated_context(
+          "#{sandbox_id}_process_wrapper",
+          supervisor_module,
+          isolation_opts
+        )
+
+        # Set up comprehensive process monitoring
+        monitor_ref = Process.monitor(supervisor_pid)
+
+        # Extract compile info to track sandbox directory for cleanup
+        compile_info = Keyword.get(full_opts, :compile_info, %{})
+        sandbox_path = Keyword.get(full_opts, :sandbox_path)
+
+        # Build list of artifacts including the unique sandbox directory
+        artifacts =
+          if sandbox_path && String.starts_with?(sandbox_path, System.tmp_dir!()) do
+            [sandbox_path | Map.get(compile_info, :beam_files, [])]
+          else
+            Map.get(compile_info, :beam_files, [])
+          end
+
+        # Update sandbox state with hybrid isolation information
+        updated_state =
+          sandbox_state
+          |> SandboxState.update_processes(app_pid, supervisor_pid, monitor_ref)
+          |> SandboxState.update_status(:running)
+          |> Map.put(:compilation_artifacts, artifacts)
+          |> Map.put(:isolation_mode, :hybrid)
+          |> Map.put(:isolation_context, case isolation_result do
+            {:ok, context} -> context
+            {:error, _} -> nil
+          end)
 
         {:ok, updated_state, monitor_ref}
 
@@ -1198,6 +1393,18 @@ defmodule Sandbox.Manager do
 
       # Clean up module transformation registry
       ModuleTransformer.destroy_module_registry(sandbox_id)
+
+      # Clean up process isolation context
+      case GenServer.whereis(Sandbox.ProcessIsolator) do
+        nil ->
+          Logger.debug("ProcessIsolator not running, skipping process isolation cleanup")
+
+        _pid ->
+          # Clean up main context
+          ProcessIsolator.destroy_isolated_context(sandbox_id)
+          # Clean up hybrid wrapper context if it exists
+          ProcessIsolator.destroy_isolated_context("#{sandbox_id}_process_wrapper")
+      end
 
       errors
     rescue
