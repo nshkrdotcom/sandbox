@@ -22,22 +22,33 @@ defmodule Sandbox.MixProject do
 
   def application do
     [
-      extra_applications: [:logger, :crypto],
-      mod: {Sandbox, []}
+      extra_applications: [:logger, :crypto, :file_system],
+      mod: {Sandbox.Application, []}
     ]
   end
 
   defp deps do
     [
+      # Core dependencies
+      {:file_system, "~> 1.0"},
+
+      # Testing infrastructure
+      {:supertester, path: "../supertester"},
+      {:cluster_test, path: "../cluster_test", only: [:dev, :test]},
+
       # Documentation
       {:ex_doc, "~> 0.30", only: :dev, runtime: false},
-      
+
       # Code analysis
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
-      
+
       # Testing
       {:stream_data, "~> 1.0", only: [:dev, :test]},
-      
+
+      # Telemetry and monitoring
+      {:telemetry, "~> 1.2"},
+      {:telemetry_metrics, "~> 1.0"},
+
       # Optional dependencies
       {:jason, "~> 1.4", optional: true}
     ]
@@ -46,7 +57,7 @@ defmodule Sandbox.MixProject do
   defp description do
     """
     Isolated OTP application management with hot-reload capabilities.
-    
+
     Sandbox enables you to create, manage, and hot-reload isolated OTP
     applications within your Elixir system. Perfect for plugin systems,
     learning environments, and safe code execution.
@@ -74,11 +85,26 @@ defmodule Sandbox.MixProject do
       source_ref: "v#{@version}",
       extras: ["README.md", "CHANGELOG.md"],
       groups_for_modules: [
-        "Core": [
+        Core: [
           Sandbox,
+          Sandbox.Application,
           Sandbox.Manager,
           Sandbox.IsolatedCompiler,
           Sandbox.ModuleVersionManager
+        ],
+        Components: [
+          Sandbox.ResourceMonitor,
+          Sandbox.SecurityController,
+          Sandbox.FileWatcher,
+          Sandbox.StatePreservation
+        ],
+        Models: [
+          Sandbox.Models.SandboxState,
+          Sandbox.Models.ModuleVersion,
+          Sandbox.Models.CompilationResult
+        ],
+        Testing: [
+          Sandbox.Test.Helpers
         ]
       ]
     ]

@@ -43,39 +43,47 @@ defmodule Sandbox do
       :ok = Sandbox.destroy_sandbox("my-sandbox")
   """
 
-  use Application
+  @doc """
+  Starts the Sandbox system as part of a supervision tree.
 
-  @doc false
-  def start(_type, _args) do
-    children = [
-      Sandbox.Manager,
-      Sandbox.ModuleVersionManager
-    ]
+  This is typically used when embedding Sandbox in another application.
 
-    opts = [strategy: :one_for_one, name: Sandbox.Supervisor]
-    Supervisor.start_link(children, opts)
+  ## Examples
+
+      children = [
+        Sandbox
+      ]
+      
+      Supervisor.start_link(children, strategy: :one_for_one)
+  """
+  def child_spec(opts) do
+    %{
+      id: Sandbox,
+      start: {Sandbox.Application, :start, [:normal, opts]},
+      type: :supervisor
+    }
   end
 
   # Delegated API functions for convenience
 
   @doc """
   Creates a new sandbox with the specified ID and configuration.
-  
+
   ## Arguments
-  
+
     * `sandbox_id` - Unique identifier for the sandbox
     * `module_or_app` - Either a supervisor module or application name
     * `opts` - Options for sandbox creation
-  
+
   ## Options
-  
+
     * `:supervisor_module` - Supervisor module to use (if app name provided)
     * `:sandbox_path` - Path to sandbox code directory
     * `:compile_timeout` - Compilation timeout in milliseconds (default: 30000)
     * `:validate_beams` - Whether to validate BEAM files (default: true)
-  
+
   ## Examples
-  
+
       # Using a supervisor module
       {:ok, sandbox} = Sandbox.create_sandbox("test", MyApp.Supervisor)
       
@@ -85,42 +93,42 @@ defmodule Sandbox do
         sandbox_path: "/path/to/sandbox"
       )
   """
-  defdelegate create_sandbox(sandbox_id, module_or_app, opts \\ []), 
+  defdelegate create_sandbox(sandbox_id, module_or_app, opts \\ []),
     to: Sandbox.Manager
 
   @doc """
   Destroys a sandbox and cleans up all its resources.
-  
+
   ## Examples
-  
+
       :ok = Sandbox.destroy_sandbox("my-sandbox")
   """
   defdelegate destroy_sandbox(sandbox_id), to: Sandbox.Manager
 
   @doc """
   Restarts a sandbox with the same configuration.
-  
+
   ## Examples
-  
+
       {:ok, sandbox_info} = Sandbox.restart_sandbox("my-sandbox")
   """
   defdelegate restart_sandbox(sandbox_id), to: Sandbox.Manager
 
   @doc """
   Hot-reloads a module in a sandbox with new code.
-  
+
   ## Arguments
-  
+
     * `sandbox_id` - The sandbox to reload code in
     * `new_beam_data` - The compiled BEAM bytecode
     * `opts` - Options for hot reload
-  
+
   ## Options
-  
+
     * `:state_handler` - Function to handle state migration `(old_state, old_version, new_version) -> new_state`
-  
+
   ## Examples
-  
+
       # Simple hot reload
       {:ok, :hot_reloaded} = Sandbox.hot_reload("my-sandbox", beam_data)
       
@@ -131,15 +139,15 @@ defmodule Sandbox do
         end
       )
   """
-  defdelegate hot_reload(sandbox_id, new_beam_data, opts \\ []), 
-    to: Sandbox.Manager, 
+  defdelegate hot_reload(sandbox_id, new_beam_data, opts \\ []),
+    to: Sandbox.Manager,
     as: :hot_reload_sandbox
 
   @doc """
   Gets information about a specific sandbox.
-  
+
   ## Examples
-  
+
       {:ok, info} = Sandbox.get_sandbox_info("my-sandbox")
       info.status #=> :running
   """
@@ -147,9 +155,9 @@ defmodule Sandbox do
 
   @doc """
   Lists all active sandboxes.
-  
+
   ## Examples
-  
+
       sandboxes = Sandbox.list_sandboxes()
       Enum.map(sandboxes, & &1.id)
   """
@@ -157,9 +165,9 @@ defmodule Sandbox do
 
   @doc """
   Gets the main process PID for a sandbox.
-  
+
   ## Examples
-  
+
       {:ok, pid} = Sandbox.get_sandbox_pid("my-sandbox")
   """
   defdelegate get_sandbox_pid(sandbox_id), to: Sandbox.Manager
@@ -168,41 +176,41 @@ defmodule Sandbox do
 
   @doc """
   Gets the current version of a module in a sandbox.
-  
+
   ## Examples
-  
+
       {:ok, 3} = Sandbox.get_module_version("my-sandbox", MyModule)
   """
-  defdelegate get_module_version(sandbox_id, module), 
+  defdelegate get_module_version(sandbox_id, module),
     to: Sandbox.ModuleVersionManager,
     as: :get_current_version
 
   @doc """
   Lists all versions of a module in a sandbox.
-  
+
   ## Examples
-  
+
       versions = Sandbox.list_module_versions("my-sandbox", MyModule)
       Enum.map(versions, & &1.version) #=> [3, 2, 1]
   """
-  defdelegate list_module_versions(sandbox_id, module), 
+  defdelegate list_module_versions(sandbox_id, module),
     to: Sandbox.ModuleVersionManager
 
   @doc """
   Rolls back a module to a previous version.
-  
+
   ## Examples
-  
+
       {:ok, :rolled_back} = Sandbox.rollback_module("my-sandbox", MyModule, 2)
   """
-  defdelegate rollback_module(sandbox_id, module, target_version), 
+  defdelegate rollback_module(sandbox_id, module, target_version),
     to: Sandbox.ModuleVersionManager
 
   @doc """
   Gets the version history for a module.
-  
+
   ## Examples
-  
+
       history = Sandbox.get_version_history("my-sandbox", MyModule)
       history.current_version #=> 3
       history.total_versions #=> 3
@@ -214,22 +222,22 @@ defmodule Sandbox do
 
   @doc """
   Compiles a sandbox directory in isolation.
-  
+
   ## Examples
-  
+
       {:ok, compile_info} = Sandbox.compile_sandbox("/path/to/sandbox")
       compile_info.beam_files #=> ["path/to/module1.beam", ...]
   """
-  defdelegate compile_sandbox(sandbox_path, opts \\ []), 
+  defdelegate compile_sandbox(sandbox_path, opts \\ []),
     to: Sandbox.IsolatedCompiler
 
   @doc """
   Compiles a single Elixir file in isolation.
-  
+
   ## Examples
-  
+
       {:ok, compile_info} = Sandbox.compile_file("/path/to/file.ex")
   """
-  defdelegate compile_file(file_path, opts \\ []), 
+  defdelegate compile_file(file_path, opts \\ []),
     to: Sandbox.IsolatedCompiler
 end
