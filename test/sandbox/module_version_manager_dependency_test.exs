@@ -198,7 +198,7 @@ defmodule Sandbox.ModuleVersionManagerDependencyTest do
 end
 
 # Test GenServer for dependency testing
-defmodule TestGenServer do
+defmodule DependencyTestGenServer do
   use GenServer
 
   def start_link({module, initial_state}) do

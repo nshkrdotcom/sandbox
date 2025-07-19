@@ -15,6 +15,7 @@ defmodule Sandbox.Manager do
 
   alias Sandbox.IsolatedCompiler
   alias Sandbox.ModuleVersionManager
+  alias Sandbox.ModuleTransformer
   alias Sandbox.Models.SandboxState
 
   # Public API
@@ -1186,15 +1187,19 @@ defmodule Sandbox.Manager do
 
   defp cleanup_module_versions(sandbox_id, errors) do
     try do
+      # Clean up module version manager
       case GenServer.whereis(Sandbox.ModuleVersionManager) do
         nil ->
           Logger.debug("ModuleVersionManager not running, skipping module cleanup")
-          errors
 
         _pid ->
           ModuleVersionManager.cleanup_sandbox_modules(sandbox_id)
-          errors
       end
+
+      # Clean up module transformation registry
+      ModuleTransformer.destroy_module_registry(sandbox_id)
+
+      errors
     rescue
       error ->
         Logger.warning("Error during module version cleanup",
@@ -1874,38 +1879,152 @@ defmodule Sandbox.Manager do
   end
 
   defp compile_sandbox_isolated(sandbox_id, sandbox_path, app_name, opts) do
-    compile_opts = [
-      timeout: Keyword.get(opts, :compile_timeout, 30_000),
-      validate_beams: Keyword.get(opts, :validate_beams, true),
-      env: %{
-        "MIX_ENV" => "dev",
-        "MIX_TARGET" => "host"
+    # Step 1: Apply module transformation to source files
+    case apply_module_transformation(sandbox_id, sandbox_path) do
+      {:ok, transformation_info} ->
+        compile_opts = [
+          timeout: Keyword.get(opts, :compile_timeout, 30_000),
+          validate_beams: Keyword.get(opts, :validate_beams, true),
+          env: %{
+            "MIX_ENV" => "dev",
+            "MIX_TARGET" => "host"
+          }
+        ]
+
+        Logger.info("Compiling sandbox #{sandbox_id} in isolation with module transformation",
+          sandbox_path: sandbox_path,
+          app_name: app_name,
+          transformed_modules: map_size(transformation_info.module_mappings)
+        )
+
+        # Step 2: Compile with transformed modules
+        case IsolatedCompiler.compile_sandbox(sandbox_path, compile_opts) do
+          {:ok, compile_info} ->
+            Logger.info("Successfully compiled sandbox #{sandbox_id}",
+              compilation_time: compile_info.compilation_time,
+              beam_files: length(compile_info.beam_files),
+              module_transformations: map_size(transformation_info.module_mappings)
+            )
+
+            # Merge transformation info into compile info
+            enhanced_compile_info =
+              Map.merge(compile_info, %{
+                module_transformation: transformation_info
+              })
+
+            {:ok, enhanced_compile_info}
+
+          {:error, reason} ->
+            report = IsolatedCompiler.compilation_report({:error, reason})
+
+            Logger.error("Failed to compile sandbox #{sandbox_id}",
+              reason: inspect(reason),
+              details: report.details
+            )
+
+            {:error, reason}
+        end
+
+      {:error, transformation_error} ->
+        Logger.error("Failed to transform modules for sandbox #{sandbox_id}",
+          reason: inspect(transformation_error)
+        )
+
+        {:error, {:module_transformation_failed, transformation_error}}
+    end
+  end
+
+  defp apply_module_transformation(sandbox_id, sandbox_path) do
+    # Create module registry for this sandbox
+    ModuleTransformer.create_module_registry(sandbox_id)
+
+    try do
+      # Find all .ex files in the sandbox
+      ex_files = Path.wildcard(Path.join([sandbox_path, "**", "*.ex"]))
+
+      transformation_info = %{
+        sandbox_id: sandbox_id,
+        module_mappings: %{},
+        transformed_files: [],
+        total_files: length(ex_files)
       }
-    ]
 
-    Logger.info("Compiling sandbox #{sandbox_id} in isolation",
-      sandbox_path: sandbox_path,
-      app_name: app_name
-    )
+      Logger.debug("Found #{length(ex_files)} source files for transformation",
+        sandbox_id: sandbox_id,
+        files: ex_files
+      )
 
-    case IsolatedCompiler.compile_sandbox(sandbox_path, compile_opts) do
-      {:ok, compile_info} ->
-        Logger.info("Successfully compiled sandbox #{sandbox_id}",
-          compilation_time: compile_info.compilation_time,
-          beam_files: length(compile_info.beam_files)
-        )
+      # Transform each file
+      result =
+        Enum.reduce_while(ex_files, {:ok, transformation_info}, fn file_path, {:ok, acc_info} ->
+          case transform_source_file(sandbox_id, file_path) do
+            {:ok, file_mappings} ->
+              updated_info = %{
+                acc_info
+                | module_mappings: Map.merge(acc_info.module_mappings, file_mappings),
+                  transformed_files: [file_path | acc_info.transformed_files]
+              }
 
-        {:ok, compile_info}
+              {:cont, {:ok, updated_info}}
 
-      {:error, reason} ->
-        report = IsolatedCompiler.compilation_report({:error, reason})
+            {:error, reason} ->
+              {:halt, {:error, {:file_transformation_failed, file_path, reason}}}
+          end
+        end)
 
-        Logger.error("Failed to compile sandbox #{sandbox_id}",
-          reason: inspect(reason),
-          details: report.details
-        )
+      case result do
+        {:ok, final_info} ->
+          Logger.info(
+            "Successfully transformed #{length(final_info.transformed_files)} files for sandbox #{sandbox_id}",
+            module_count: map_size(final_info.module_mappings)
+          )
 
-        {:error, reason}
+          {:ok, final_info}
+
+        {:error, _} = error ->
+          # Clean up partial transformation
+          ModuleTransformer.destroy_module_registry(sandbox_id)
+          error
+      end
+    rescue
+      error ->
+        ModuleTransformer.destroy_module_registry(sandbox_id)
+        {:error, {:transformation_exception, error}}
+    end
+  end
+
+  defp transform_source_file(sandbox_id, file_path) do
+    try do
+      # Read the source file
+      case File.read(file_path) do
+        {:ok, source_code} ->
+          # Transform the source code
+          case ModuleTransformer.transform_source(source_code, sandbox_id) do
+            {:ok, transformed_code, module_mappings} ->
+              # Write the transformed code back
+              case File.write(file_path, transformed_code) do
+                :ok ->
+                  # Register module mappings
+                  Enum.each(module_mappings, fn {original, transformed} ->
+                    ModuleTransformer.register_module_mapping(sandbox_id, original, transformed)
+                  end)
+
+                  {:ok, module_mappings}
+
+                {:error, write_error} ->
+                  {:error, {:write_failed, write_error}}
+              end
+
+            {:error, transform_error} ->
+              {:error, {:transform_failed, transform_error}}
+          end
+
+        {:error, read_error} ->
+          {:error, {:read_failed, read_error}}
+      end
+    rescue
+      error ->
+        {:error, {:file_exception, error}}
     end
   end
 
