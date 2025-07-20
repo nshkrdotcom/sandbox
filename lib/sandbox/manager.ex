@@ -1091,9 +1091,9 @@ defmodule Sandbox.Manager do
 
   defp start_sandbox_application_with_monitoring(sandbox_state) do
     %SandboxState{
-      id: sandbox_id,
-      app_name: app_name,
-      supervisor_module: supervisor_module,
+      id: _sandbox_id,
+      app_name: _app_name,
+      supervisor_module: _supervisor_module,
       config: config
     } = sandbox_state
 
@@ -1411,7 +1411,7 @@ defmodule Sandbox.Manager do
     %SandboxState{
       id: sandbox_id,
       supervisor_module: supervisor_module,
-      config: config
+      config: _config
     } = sandbox_state
 
     # Create ETS table without module compilation
@@ -1446,7 +1446,7 @@ defmodule Sandbox.Manager do
   defp create_ets_virtual_code_table(sandbox_state) do
     %SandboxState{
       id: sandbox_id,
-      config: config
+      config: _config
     } = sandbox_state
 
     # Create ETS table for virtual code storage
@@ -1478,7 +1478,7 @@ defmodule Sandbox.Manager do
     # This would be similar to start_sandbox_application but with ETS integration
     # For now, fall back to standard compilation with ETS storage
     case start_sandbox_application(sandbox_id, app_name, supervisor_module, opts) do
-      {:ok, app_pid, supervisor_pid, full_opts} = success ->
+      {:ok, _app_pid, _supervisor_pid, _full_opts} = success ->
         # TODO: Load compiled modules into ETS table
         # This is where we'd integrate the compiled BEAM files into the virtual code table
         Logger.debug("ETS-based sandbox application started",

@@ -1,8 +1,6 @@
 defmodule Sandbox.IsolatedCompilerPerformanceTest do
   use ExUnit.Case, async: true
-  import Supertester.OTPHelpers
   import Supertester.Assertions
-  import Supertester.GenServerHelpers
 
   alias Sandbox.IsolatedCompiler
 
@@ -30,7 +28,7 @@ defmodule Sandbox.IsolatedCompilerPerformanceTest do
       create_complex_project(sandbox_dir, module_count)
 
       # Measure full compilation time
-      {full_time, {:ok, full_result}} =
+      {full_time, {:ok, _full_result}} =
         :timer.tc(fn ->
           IsolatedCompiler.compile_sandbox(sandbox_dir, cache_enabled: true)
         end)

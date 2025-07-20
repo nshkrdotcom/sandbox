@@ -12,12 +12,8 @@ defmodule Sandbox.ManagerLifecycleTest do
 
   use ExUnit.Case, async: true
 
-  import Supertester.OTPHelpers
-  import Supertester.GenServerHelpers
-  import Supertester.Assertions
 
   alias Sandbox.Manager
-  alias Sandbox.Models.SandboxState
 
   @moduletag :capture_log
 
@@ -608,7 +604,7 @@ defmodule Sandbox.ManagerLifecycleTest do
   end
 
   # Helper function to wait for process death
-  defp assert_process_death(pid, timeout \\ 2000) do
+  defp assert_process_death(pid, timeout) do
     ref = Process.monitor(pid)
 
     receive do

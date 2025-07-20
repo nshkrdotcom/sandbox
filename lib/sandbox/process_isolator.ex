@@ -17,8 +17,6 @@ defmodule Sandbox.ProcessIsolator do
   use GenServer
   require Logger
 
-  alias Sandbox.ResourceMonitor
-  alias Sandbox.ModuleTransformer
 
   @doc """
   Starts the process isolator.

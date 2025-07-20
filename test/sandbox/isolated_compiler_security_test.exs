@@ -1,8 +1,5 @@
 defmodule Sandbox.IsolatedCompilerSecurityTest do
   use ExUnit.Case, async: true
-  import Supertester.OTPHelpers
-  import Supertester.Assertions
-  import Supertester.GenServerHelpers
 
   alias Sandbox.IsolatedCompiler
 
@@ -316,7 +313,7 @@ defmodule Sandbox.IsolatedCompilerSecurityTest do
       """)
 
       # Should compile but with security warnings
-      assert {:ok, compile_info} =
+      assert {:ok, _compile_info} =
                IsolatedCompiler.compile_sandbox(sandbox_dir,
                  security_scan: true
                )
@@ -557,7 +554,7 @@ defmodule Sandbox.IsolatedCompilerSecurityTest do
       assert length(compile_info.beam_files) > 0
     end
 
-    test "validates sandbox path safety", %{sandbox_dir: sandbox_dir} do
+    test "validates sandbox path safety", %{sandbox_dir: _sandbox_dir} do
       # Test with potentially unsafe paths
       unsafe_paths = [
         "/etc/test_sandbox",

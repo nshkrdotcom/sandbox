@@ -3,8 +3,6 @@ defmodule Sandbox.ManagerConfigTest do
 
   require Logger
   alias Sandbox.Manager
-  import Supertester.OTPHelpers
-  import Supertester.Assertions
 
   @moduletag :capture_log
 
@@ -522,7 +520,7 @@ defmodule Sandbox.ManagerConfigTest do
       result = Manager.create_sandbox(sandbox_id, TestSupervisor7, comprehensive_config)
 
       case result do
-        {:ok, sandbox_info} ->
+        {:ok, _sandbox_info} ->
           # Use Supertester OTP helpers to wait for sandbox to be ready
           wait_for_sandbox_ready(sandbox_id, 5000)
 

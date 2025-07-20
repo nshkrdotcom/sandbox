@@ -1,8 +1,6 @@
 defmodule Sandbox.ApplicationTest do
   use ExUnit.Case, async: true
 
-  import Supertester.OTPHelpers
-  import Supertester.Assertions
 
   describe "ETS table initialization" do
     test "creates all required ETS tables" do

@@ -1,8 +1,6 @@
 defmodule SandboxIntegrationTest do
   use ExUnit.Case, async: true
 
-  import Supertester.OTPHelpers
-  import Supertester.Assertions
 
   describe "basic sandbox structure" do
     test "application starts with all components" do

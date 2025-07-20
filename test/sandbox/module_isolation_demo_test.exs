@@ -66,7 +66,7 @@ defmodule Sandbox.ModuleIsolationDemoTest do
       "demo_sandbox_3_#{:rand.uniform(1000)}"
     ]
 
-    results = []
+    _results = []
 
     # Create sandboxes sequentially to see the transformation effect
     results =

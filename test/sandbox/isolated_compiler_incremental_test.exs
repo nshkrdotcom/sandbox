@@ -1,8 +1,5 @@
 defmodule Sandbox.IsolatedCompilerIncrementalTest do
   use ExUnit.Case, async: true
-  import Supertester.OTPHelpers
-  import Supertester.Assertions
-  import Supertester.GenServerHelpers
 
   alias Sandbox.IsolatedCompiler
 
@@ -120,7 +117,7 @@ defmodule Sandbox.IsolatedCompilerIncrementalTest do
       create_sample_module(sandbox_dir, "CachedModule", "def cached_func, do: :cached")
 
       # First compilation
-      assert {:ok, first_result} =
+      assert {:ok, _first_result} =
                IsolatedCompiler.compile_sandbox(sandbox_dir, cache_enabled: true)
 
       # Check cache directory was created
