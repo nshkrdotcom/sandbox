@@ -9,19 +9,19 @@ defmodule TestWarningFilter do
   def filter_warnings do
     # Capture the original warning handler
     original_handler = Process.get(:elixir_compiler_warning_handler)
-    
+
     # Set up our custom warning filter
     Process.put(:elixir_compiler_warning_handler, fn file, line, warning ->
       # Filter out expected sandbox module redefinitions
-      unless String.contains?(warning, "redefining module") and 
-             (String.contains?(file, "/tmp/") or 
-              String.contains?(warning, "BaseModule") or
-              String.contains?(warning, "DependentModule") or
-              String.contains?(warning, "ModuleA") or
-              String.contains?(warning, "ModuleB") or
-              String.contains?(warning, "HashModule") or
-              String.contains?(warning, "ForceModule") or
-              String.contains?(warning, "ProcessDemo")) do
+      unless String.contains?(warning, "redefining module") and
+               (String.contains?(file, "/tmp/") or
+                  String.contains?(warning, "BaseModule") or
+                  String.contains?(warning, "DependentModule") or
+                  String.contains?(warning, "ModuleA") or
+                  String.contains?(warning, "ModuleB") or
+                  String.contains?(warning, "HashModule") or
+                  String.contains?(warning, "ForceModule") or
+                  String.contains?(warning, "ProcessDemo")) do
         # Pass through other warnings to the original handler
         if original_handler do
           original_handler.(file, line, warning)

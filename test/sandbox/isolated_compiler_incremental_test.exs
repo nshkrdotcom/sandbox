@@ -108,10 +108,11 @@ defmodule Sandbox.IsolatedCompilerIncrementalTest do
 
       # Incremental compilation should fail gracefully
       # Capture stderr to suppress expected compilation error output
-      {_captured_output, actual_result} = ExUnit.CaptureIO.with_io(:stderr, fn ->
-        result = IsolatedCompiler.incremental_compile(sandbox_dir)
-        {nil, result}
-      end)
+      {_captured_output, actual_result} =
+        ExUnit.CaptureIO.with_io(:stderr, fn ->
+          result = IsolatedCompiler.incremental_compile(sandbox_dir)
+          {nil, result}
+        end)
 
       # The incremental compiler returns compilation error output as a string
       assert is_binary(actual_result) and String.contains?(actual_result, "== Compilation error")
