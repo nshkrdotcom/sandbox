@@ -11,7 +11,7 @@ defmodule Sandbox.ProcessIsolatorTest do
       nil ->
         {:ok, _pid} = ProcessIsolator.start_link()
         :ok
-        
+
       _pid ->
         :ok
     end
@@ -37,11 +37,12 @@ defmodule Sandbox.ProcessIsolatorTest do
     test "creates isolated process context successfully" do
       sandbox_id = "process_test_#{:rand.uniform(10000)}"
 
-      assert {:ok, context} = ProcessIsolator.create_isolated_context(
-        sandbox_id,
-        TestSupervisor,
-        isolation_level: :medium
-      )
+      assert {:ok, context} =
+               ProcessIsolator.create_isolated_context(
+                 sandbox_id,
+                 TestSupervisor,
+                 isolation_level: :medium
+               )
 
       assert context.sandbox_id == sandbox_id
       assert context.supervisor_module == TestSupervisor
@@ -57,12 +58,13 @@ defmodule Sandbox.ProcessIsolatorTest do
     test "creates context with strict isolation level" do
       sandbox_id = "strict_test_#{:rand.uniform(10000)}"
 
-      assert {:ok, context} = ProcessIsolator.create_isolated_context(
-        sandbox_id,
-        TestSupervisor,
-        isolation_level: :strict,
-        resource_limits: %{max_memory: 32 * 1024 * 1024}
-      )
+      assert {:ok, context} =
+               ProcessIsolator.create_isolated_context(
+                 sandbox_id,
+                 TestSupervisor,
+                 isolation_level: :strict,
+                 resource_limits: %{max_memory: 32 * 1024 * 1024}
+               )
 
       assert context.isolation_level == :strict
       assert context.resource_limits.max_memory == 32 * 1024 * 1024
@@ -75,16 +77,18 @@ defmodule Sandbox.ProcessIsolatorTest do
       sandbox_id = "duplicate_test_#{:rand.uniform(10000)}"
 
       # Create first context
-      assert {:ok, _context} = ProcessIsolator.create_isolated_context(
-        sandbox_id,
-        TestSupervisor
-      )
+      assert {:ok, _context} =
+               ProcessIsolator.create_isolated_context(
+                 sandbox_id,
+                 TestSupervisor
+               )
 
       # Try to create duplicate
-      assert {:error, {:already_exists, ^sandbox_id}} = ProcessIsolator.create_isolated_context(
-        sandbox_id,
-        TestSupervisor
-      )
+      assert {:error, {:already_exists, ^sandbox_id}} =
+               ProcessIsolator.create_isolated_context(
+                 sandbox_id,
+                 TestSupervisor
+               )
 
       # Cleanup
       ProcessIsolator.destroy_isolated_context(sandbox_id)
@@ -96,10 +100,11 @@ defmodule Sandbox.ProcessIsolatorTest do
       sandbox_id = "destroy_test_#{:rand.uniform(10000)}"
 
       # Create context
-      {:ok, context} = ProcessIsolator.create_isolated_context(
-        sandbox_id,
-        TestSupervisor
-      )
+      {:ok, context} =
+        ProcessIsolator.create_isolated_context(
+          sandbox_id,
+          TestSupervisor
+        )
 
       isolated_pid = context.isolated_pid
       assert Process.alive?(isolated_pid)
@@ -108,7 +113,8 @@ defmodule Sandbox.ProcessIsolatorTest do
       assert :ok = ProcessIsolator.destroy_isolated_context(sandbox_id)
 
       # Process should be terminated
-      :timer.sleep(100)  # Give time for cleanup
+      # Give time for cleanup
+      :timer.sleep(100)
       refute Process.alive?(isolated_pid)
 
       # Context should not be found
@@ -125,11 +131,12 @@ defmodule Sandbox.ProcessIsolatorTest do
       sandbox_id = "info_test_#{:rand.uniform(10000)}"
 
       # Create context
-      {:ok, _context} = ProcessIsolator.create_isolated_context(
-        sandbox_id,
-        TestSupervisor,
-        isolation_level: :relaxed
-      )
+      {:ok, _context} =
+        ProcessIsolator.create_isolated_context(
+          sandbox_id,
+          TestSupervisor,
+          isolation_level: :relaxed
+        )
 
       # Get info
       assert {:ok, info} = ProcessIsolator.get_context_info(sandbox_id)
@@ -161,10 +168,11 @@ defmodule Sandbox.ProcessIsolatorTest do
 
       # Create multiple contexts
       Enum.each(sandbox_ids, fn sandbox_id ->
-        {:ok, _context} = ProcessIsolator.create_isolated_context(
-          sandbox_id,
-          TestSupervisor
-        )
+        {:ok, _context} =
+          ProcessIsolator.create_isolated_context(
+            sandbox_id,
+            TestSupervisor
+          )
       end)
 
       # List contexts
@@ -172,7 +180,7 @@ defmodule Sandbox.ProcessIsolatorTest do
 
       # Should include our test contexts
       context_ids = Enum.map(contexts, & &1.sandbox_id)
-      
+
       Enum.each(sandbox_ids, fn sandbox_id ->
         assert sandbox_id in context_ids
       end)
@@ -189,10 +197,11 @@ defmodule Sandbox.ProcessIsolatorTest do
       sandbox_id = "message_test_#{:rand.uniform(10000)}"
 
       # Create context
-      {:ok, _context} = ProcessIsolator.create_isolated_context(
-        sandbox_id,
-        TestSupervisor
-      )
+      {:ok, _context} =
+        ProcessIsolator.create_isolated_context(
+          sandbox_id,
+          TestSupervisor
+        )
 
       # Send message
       assert :ok = ProcessIsolator.send_message_to_sandbox(sandbox_id, {:ping})
@@ -202,10 +211,11 @@ defmodule Sandbox.ProcessIsolatorTest do
     end
 
     test "returns error for non-existent sandbox" do
-      assert {:error, :not_found} = ProcessIsolator.send_message_to_sandbox(
-        "non_existent",
-        {:test_message}
-      )
+      assert {:error, :not_found} =
+               ProcessIsolator.send_message_to_sandbox(
+                 "non_existent",
+                 {:test_message}
+               )
     end
   end
 
@@ -215,15 +225,17 @@ defmodule Sandbox.ProcessIsolatorTest do
       sandbox_2 = "isolation_test_2_#{:rand.uniform(10000)}"
 
       # Create two isolated contexts
-      {:ok, context1} = ProcessIsolator.create_isolated_context(
-        sandbox_1,
-        TestSupervisor
-      )
+      {:ok, context1} =
+        ProcessIsolator.create_isolated_context(
+          sandbox_1,
+          TestSupervisor
+        )
 
-      {:ok, context2} = ProcessIsolator.create_isolated_context(
-        sandbox_2,
-        TestSupervisor
-      )
+      {:ok, context2} =
+        ProcessIsolator.create_isolated_context(
+          sandbox_2,
+          TestSupervisor
+        )
 
       # Processes should be different
       refute context1.isolated_pid == context2.isolated_pid
@@ -247,10 +259,11 @@ defmodule Sandbox.ProcessIsolatorTest do
       sandbox_id = "crash_test_#{:rand.uniform(10000)}"
 
       # Create context
-      {:ok, context} = ProcessIsolator.create_isolated_context(
-        sandbox_id,
-        TestSupervisor
-      )
+      {:ok, context} =
+        ProcessIsolator.create_isolated_context(
+          sandbox_id,
+          TestSupervisor
+        )
 
       isolated_pid = context.isolated_pid
       assert Process.alive?(isolated_pid)
@@ -277,11 +290,12 @@ defmodule Sandbox.ProcessIsolatorTest do
       }
 
       # Create context with resource limits
-      {:ok, context} = ProcessIsolator.create_isolated_context(
-        sandbox_id,
-        TestSupervisor,
-        resource_limits: resource_limits
-      )
+      {:ok, context} =
+        ProcessIsolator.create_isolated_context(
+          sandbox_id,
+          TestSupervisor,
+          resource_limits: resource_limits
+        )
 
       assert context.resource_limits.max_memory == resource_limits.max_memory
       assert context.resource_limits.max_processes == resource_limits.max_processes

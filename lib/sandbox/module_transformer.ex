@@ -404,16 +404,16 @@ defmodule Sandbox.ModuleTransformer do
 
   @doc """
   Creates a globally unique namespace for a sandbox to prevent module conflicts.
-  
+
   This function creates a namespace that is unique across all sandboxes and
   test runs by incorporating a timestamp and unique identifier.
-  
+
   ## Parameters
   - `sanitized_id`: The sanitized sandbox ID
-  
+
   ## Returns
   - A globally unique namespace string
-  
+
   ## Examples
       iex> namespace = ModuleTransformer.create_unique_namespace("Test123")
       iex> String.starts_with?(namespace, "Sandbox_Test123_")
@@ -423,10 +423,10 @@ defmodule Sandbox.ModuleTransformer do
     # Use a combination of timestamp and unique integer for global uniqueness
     timestamp = System.system_time(:millisecond)
     unique_id = System.unique_integer([:positive])
-    
+
     # Create a shorter, but still unique suffix
     unique_suffix = :erlang.phash2({timestamp, unique_id, self()}) |> abs()
-    
+
     "Sandbox_#{sanitized_id}_#{unique_suffix}"
   end
 end

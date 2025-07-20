@@ -1098,16 +1098,16 @@ defmodule Sandbox.Manager do
 
     # Check isolation mode
     isolation_mode = Map.get(config, :isolation_mode, :hybrid)
-    
+
     case isolation_mode do
       :process ->
         # Pure process isolation (Phase 2)
         start_with_process_isolation(sandbox_state)
-        
+
       :module ->
         # Pure module transformation (Phase 1)
         start_with_module_transformation(sandbox_state)
-        
+
       :hybrid ->
         # Combined approach (Phase 1 + Phase 2) - default
         start_with_hybrid_isolation(sandbox_state)
@@ -1127,10 +1127,15 @@ defmodule Sandbox.Manager do
       nil ->
         # No sandbox path, use pure process isolation without module compilation
         create_pure_process_isolation(sandbox_state)
-        
+
       _sandbox_path ->
         # Apply module transformation first, then process isolation
-        case start_sandbox_application(sandbox_id, app_name, supervisor_module, Map.to_list(config)) do
+        case start_sandbox_application(
+               sandbox_id,
+               app_name,
+               supervisor_module,
+               Map.to_list(config)
+             ) do
           {:ok, app_pid, supervisor_pid, full_opts} ->
             # Also create isolated process context for additional isolation
             isolation_opts = [
@@ -1140,11 +1145,12 @@ defmodule Sandbox.Manager do
             ]
 
             # Create additional process isolation context
-            isolation_result = ProcessIsolator.create_isolated_context(
-              "#{sandbox_id}_process_wrapper",
-              supervisor_module,
-              isolation_opts
-            )
+            isolation_result =
+              ProcessIsolator.create_isolated_context(
+                "#{sandbox_id}_process_wrapper",
+                supervisor_module,
+                isolation_opts
+              )
 
             # Set up comprehensive process monitoring
             monitor_ref = Process.monitor(supervisor_pid)
@@ -1152,7 +1158,7 @@ defmodule Sandbox.Manager do
             # Extract compile info to track sandbox directory for cleanup
             compile_info = Keyword.get(full_opts, :compile_info, %{})
             sandbox_path = Keyword.get(full_opts, :sandbox_path)
-            
+
             # Build list of artifacts including the unique sandbox directory
             artifacts =
               if sandbox_path && String.starts_with?(sandbox_path, System.tmp_dir!()) do
@@ -1168,10 +1174,13 @@ defmodule Sandbox.Manager do
               |> SandboxState.update_status(:running)
               |> Map.put(:compilation_artifacts, artifacts)
               |> Map.put(:isolation_mode, :process)
-              |> Map.put(:isolation_context, case isolation_result do
-                {:ok, context} -> context
-                {:error, _} -> nil
-              end)
+              |> Map.put(
+                :isolation_context,
+                case isolation_result do
+                  {:ok, context} -> context
+                  {:error, _} -> nil
+                end
+              )
 
             {:ok, updated_state, monitor_ref}
 
@@ -1273,17 +1282,19 @@ defmodule Sandbox.Manager do
       {:ok, app_pid, supervisor_pid, full_opts} ->
         # Also create process isolation context for additional isolation
         isolation_opts = [
-          isolation_level: Map.get(config, :isolation_level, :relaxed),  # Relaxed since module transformation handles conflicts
+          # Relaxed since module transformation handles conflicts
+          isolation_level: Map.get(config, :isolation_level, :relaxed),
           communication_mode: Map.get(config, :communication_mode, :message_passing),
           resource_limits: Map.get(config, :resource_limits, %{})
         ]
 
         # Optional: Create additional process isolation
-        isolation_result = ProcessIsolator.create_isolated_context(
-          "#{sandbox_id}_process_wrapper",
-          supervisor_module,
-          isolation_opts
-        )
+        isolation_result =
+          ProcessIsolator.create_isolated_context(
+            "#{sandbox_id}_process_wrapper",
+            supervisor_module,
+            isolation_opts
+          )
 
         # Set up comprehensive process monitoring
         monitor_ref = Process.monitor(supervisor_pid)
@@ -1307,10 +1318,13 @@ defmodule Sandbox.Manager do
           |> SandboxState.update_status(:running)
           |> Map.put(:compilation_artifacts, artifacts)
           |> Map.put(:isolation_mode, :hybrid)
-          |> Map.put(:isolation_context, case isolation_result do
-            {:ok, context} -> context
-            {:error, _} -> nil
-          end)
+          |> Map.put(
+            :isolation_context,
+            case isolation_result do
+              {:ok, context} -> context
+              {:error, _} -> nil
+            end
+          )
 
         {:ok, updated_state, monitor_ref}
 

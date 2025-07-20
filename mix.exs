@@ -84,6 +84,8 @@ defmodule Sandbox.MixProject do
       source_url: @source_url,
       source_ref: "v#{@version}",
       extras: ["README.md", "CHANGELOG.md"],
+      before_closing_head_tag: &docs_before_closing_head_tag/1,
+      before_closing_body_tag: &docs_before_closing_body_tag/1,
       groups_for_modules: [
         Core: [
           Sandbox,
@@ -109,6 +111,40 @@ defmodule Sandbox.MixProject do
       ]
     ]
   end
+
+  defp docs_before_closing_head_tag(:html) do
+    """
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+    """
+  end
+
+  defp docs_before_closing_head_tag(_), do: ""
+
+  defp docs_before_closing_body_tag(:html) do
+    """
+    <script>
+      document.addEventListener("DOMContentLoaded", function () {
+        mermaid.initialize({
+          startOnLoad: true,
+          theme: "default",
+          themeVariables: {
+            primaryColor: "#6366f1",
+            primaryTextColor: "#fff",
+            primaryBorderColor: "#4f46e5",
+            lineColor: "#6b7280",
+            sectionBkgColor: "#f3f4f6",
+            altSectionBkgColor: "#ffffff",
+            gridColor: "#e5e7eb",
+            secondaryColor: "#e0e7ff",
+            tertiaryColor: "#f1f5f9"
+          }
+        });
+      });
+    </script>
+    """
+  end
+
+  defp docs_before_closing_body_tag(_), do: ""
 
   defp elixirc_paths(:test), do: ["lib", "test/support"]
   defp elixirc_paths(_), do: ["lib"]

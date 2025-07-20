@@ -1,11 +1,11 @@
 defmodule Sandbox.ProcessIsolator do
   @moduledoc """
   Process-based isolation infrastructure for sandboxes.
-  
+
   This module implements Phase 2 of the optimal module isolation architecture,
   providing process-level isolation where each sandbox runs in its own
   isolated process context with separate supervision trees.
-  
+
   Key features:
   - Process isolation with separate supervision trees
   - Memory isolation with individual heap spaces
@@ -29,7 +29,7 @@ defmodule Sandbox.ProcessIsolator do
 
   @doc """
   Creates an isolated process context for a sandbox.
-  
+
   ## Parameters
   - `sandbox_id`: Unique identifier for the sandbox
   - `supervisor_module`: The supervisor module to run in isolation
@@ -37,21 +37,25 @@ defmodule Sandbox.ProcessIsolator do
     - `:resource_limits` - Memory, process, and time limits
     - `:isolation_level` - :strict, :medium, :relaxed (default: :medium)
     - `:communication_mode` - :none, :message_passing, :shared_ets (default: :message_passing)
-  
+
   ## Returns
   - `{:ok, isolation_context}` - Success with isolation context
   - `{:error, reason}` - Isolation setup failed
   """
   def create_isolated_context(sandbox_id, supervisor_module, opts \\ []) do
-    GenServer.call(__MODULE__, {:create_isolated_context, sandbox_id, supervisor_module, opts}, 30_000)
+    GenServer.call(
+      __MODULE__,
+      {:create_isolated_context, sandbox_id, supervisor_module, opts},
+      30_000
+    )
   end
 
   @doc """
   Destroys an isolated process context.
-  
+
   ## Parameters
   - `sandbox_id`: Unique identifier for the sandbox
-  
+
   ## Returns
   - `:ok` - Context destroyed successfully
   - `{:error, reason}` - Destruction failed
@@ -62,10 +66,10 @@ defmodule Sandbox.ProcessIsolator do
 
   @doc """
   Gets information about an isolated context.
-  
+
   ## Parameters
   - `sandbox_id`: Unique identifier for the sandbox
-  
+
   ## Returns
   - `{:ok, context_info}` - Context information
   - `{:error, :not_found}` - Context doesn't exist
@@ -76,7 +80,7 @@ defmodule Sandbox.ProcessIsolator do
 
   @doc """
   Lists all active isolated contexts.
-  
+
   ## Returns
   - List of context information maps
   """
@@ -86,12 +90,12 @@ defmodule Sandbox.ProcessIsolator do
 
   @doc """
   Sends a message to a sandbox in an isolated context.
-  
+
   ## Parameters
   - `sandbox_id`: Target sandbox identifier
   - `message`: Message to send
   - `opts`: Communication options
-  
+
   ## Returns
   - `:ok` - Message sent successfully
   - `{:error, reason}` - Send failed
@@ -107,7 +111,13 @@ defmodule Sandbox.ProcessIsolator do
     # Create ETS table for tracking isolated contexts
     case :ets.info(:sandbox_isolation_contexts) do
       :undefined ->
-        :ets.new(:sandbox_isolation_contexts, [:named_table, :set, :public, {:read_concurrency, true}])
+        :ets.new(:sandbox_isolation_contexts, [
+          :named_table,
+          :set,
+          :public,
+          {:read_concurrency, true}
+        ])
+
         Logger.info("Created ETS table for sandbox isolation contexts")
 
       _ ->
@@ -133,14 +143,14 @@ defmodule Sandbox.ProcessIsolator do
           isolation_level: context.isolation_level,
           resource_limits: context.resource_limits
         )
-        
+
         {:reply, {:ok, context}, updated_state}
 
       {:error, reason} ->
         Logger.error("Failed to create isolated context for sandbox #{sandbox_id}",
           reason: inspect(reason)
         )
-        
+
         {:reply, {:error, reason}, state}
     end
   end
@@ -156,7 +166,7 @@ defmodule Sandbox.ProcessIsolator do
         Logger.error("Failed to destroy isolated context for sandbox #{sandbox_id}",
           reason: inspect(reason)
         )
-        
+
         {:reply, {:error, reason}, state}
     end
   end
@@ -176,7 +186,7 @@ defmodule Sandbox.ProcessIsolator do
 
   @impl true
   def handle_call(:list_contexts, _from, state) do
-    contexts = 
+    contexts =
       state.contexts
       |> Enum.map(fn {_id, context} -> update_context_metrics(context) end)
 
@@ -275,6 +285,7 @@ defmodule Sandbox.ProcessIsolator do
 
         # Clean up monitoring
         monitor_ref = find_monitor_ref(sandbox_id, state.monitors)
+
         if monitor_ref do
           Process.demonitor(monitor_ref, [:flush])
         end
@@ -303,16 +314,18 @@ defmodule Sandbox.ProcessIsolator do
       supervisor_module: supervisor_module,
       isolation_level: isolation_level,
       resource_limits: resource_limits,
-      module_transformer: true  # Phase 2 includes Phase 1 transformations
+      # Phase 2 includes Phase 1 transformations
+      module_transformer: true
     }
 
     try do
       # Spawn the isolated process with appropriate flags
       spawn_opts = build_spawn_options(isolation_level, resource_limits)
-      
-      isolated_pid = spawn(fn ->
-        isolated_process_main(isolation_config)
-      end)
+
+      isolated_pid =
+        spawn(fn ->
+          isolated_process_main(isolation_config)
+        end)
 
       # Set up initial resource monitoring
       isolation_data = %{
@@ -321,7 +334,6 @@ defmodule Sandbox.ProcessIsolator do
       }
 
       {:ok, isolated_pid, isolation_data}
-
     rescue
       error ->
         {:error, {:spawn_failed, error}}
@@ -336,19 +348,23 @@ defmodule Sandbox.ProcessIsolator do
       :strict ->
         # Maximum isolation
         max_heap = Map.get(resource_limits, :max_memory, 64 * 1024 * 1024)
-        base_opts ++ [
-          {:max_heap_size, max_heap},
-          {:message_queue_data, :off_heap},
-          {:priority, :low}
-        ]
+
+        base_opts ++
+          [
+            {:max_heap_size, max_heap},
+            {:message_queue_data, :off_heap},
+            {:priority, :low}
+          ]
 
       :medium ->
         # Balanced isolation
         max_heap = Map.get(resource_limits, :max_memory, 128 * 1024 * 1024)
-        base_opts ++ [
-          {:max_heap_size, max_heap},
-          {:message_queue_data, :on_heap}
-        ]
+
+        base_opts ++
+          [
+            {:max_heap_size, max_heap},
+            {:message_queue_data, :on_heap}
+          ]
 
       :relaxed ->
         # Minimal isolation
@@ -356,6 +372,7 @@ defmodule Sandbox.ProcessIsolator do
     end
   end
 
+  @spec isolated_process_main(map()) :: no_return()
   defp isolated_process_main(config) do
     %{
       sandbox_id: sandbox_id,
@@ -383,7 +400,7 @@ defmodule Sandbox.ProcessIsolator do
         {:ok, supervisor_pid} ->
           # Keep the process alive and monitor the supervisor
           ref = Process.monitor(supervisor_pid)
-          
+
           isolated_process_loop(sandbox_id, supervisor_pid, ref)
 
         {:error, reason} ->
@@ -391,16 +408,15 @@ defmodule Sandbox.ProcessIsolator do
             sandbox_id: sandbox_id,
             reason: inspect(reason)
           )
-          
+
           exit({:supervisor_start_failed, reason})
       end
-
     rescue
       error ->
         Logger.error("Error in isolated process for sandbox #{sandbox_id}",
           error: inspect(error)
         )
-        
+
         exit({:isolated_process_error, error})
     end
   end
@@ -411,7 +427,7 @@ defmodule Sandbox.ProcessIsolator do
         Logger.warning("Supervisor died in isolated process for sandbox #{sandbox_id}",
           reason: inspect(reason)
         )
-        
+
         exit({:supervisor_died, reason})
 
       {:isolator_message, message} ->
@@ -429,7 +445,7 @@ defmodule Sandbox.ProcessIsolator do
           sandbox_id: sandbox_id,
           message: inspect(other)
         )
-        
+
         isolated_process_loop(sandbox_id, supervisor_pid, monitor_ref)
     end
   end
@@ -481,7 +497,7 @@ defmodule Sandbox.ProcessIsolator do
 
   defp perform_resource_check(sandbox_id) do
     usage = get_isolated_resource_usage()
-    
+
     Logger.debug("Resource check for isolated sandbox",
       sandbox_id: sandbox_id,
       memory: usage.memory,
@@ -494,10 +510,11 @@ defmodule Sandbox.ProcessIsolator do
 
   defp get_isolated_resource_usage do
     process_info = Process.info(self(), [:memory, :message_queue_len, :total_heap_size])
-    
+
     %{
       memory: process_info[:total_heap_size] || 0,
-      processes: 1,  # This process plus any children
+      # This process plus any children
+      processes: 1,
       message_queue: process_info[:message_queue_len] || 0,
       uptime: System.monotonic_time(:millisecond) - (Process.get(:start_time) || 0)
     }
@@ -507,19 +524,19 @@ defmodule Sandbox.ProcessIsolator do
     if Process.alive?(context.isolated_pid) do
       # Send graceful shutdown message first
       send(context.isolated_pid, {:isolator_message, {:shutdown}})
-      
+
       # Wait efficiently for graceful shutdown with shorter timeout
       ref = Process.monitor(context.isolated_pid)
-      
+
       receive do
         {:DOWN, ^ref, :process, _, _} ->
           # Process shut down gracefully
           Process.demonitor(ref, [:flush])
-          
       after
-        100 ->  # Much shorter timeout: 100ms instead of 1000ms
+        # Much shorter timeout: 100ms instead of 1000ms
+        100 ->
           Process.demonitor(ref, [:flush])
-          
+
           # Force kill if still alive
           if Process.alive?(context.isolated_pid) do
             Process.exit(context.isolated_pid, :kill)
@@ -553,7 +570,7 @@ defmodule Sandbox.ProcessIsolator do
 
         process_info ->
           uptime = DateTime.diff(DateTime.utc_now(), context.created_at, :millisecond)
-          
+
           updated_usage = %{
             memory: process_info[:total_heap_size] || 0,
             processes: 1,
@@ -588,9 +605,11 @@ defmodule Sandbox.ProcessIsolator do
 
   defp default_resource_limits do
     %{
-      max_memory: 128 * 1024 * 1024,  # 128MB
+      # 128MB
+      max_memory: 128 * 1024 * 1024,
       max_processes: 1000,
-      max_execution_time: 300_000     # 5 minutes
+      # 5 minutes
+      max_execution_time: 300_000
     }
   end
 end

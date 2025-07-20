@@ -18,12 +18,15 @@ defmodule Sandbox.ModuleTransformerTest do
       assert {:ok, transformed_code, module_mapping} =
                ModuleTransformer.transform_source(source, sandbox_id)
 
-      # Should contain transformed module name
-      assert String.contains?(transformed_code, "Sandbox_Test123_MyModule")
+      # Should contain transformed module name with unique suffix
+      assert String.contains?(transformed_code, "Sandbox_Test123_")
+      assert String.contains?(transformed_code, "_MyModule")
 
       # Should have module mapping
       assert Map.has_key?(module_mapping, :MyModule)
-      assert module_mapping[:MyModule] == :Sandbox_Test123_MyModule
+      transformed_name = module_mapping[:MyModule]
+      assert String.starts_with?(to_string(transformed_name), "Sandbox_Test123_")
+      assert String.ends_with?(to_string(transformed_name), "_MyModule")
     end
 
     test "preserves standard library modules" do
@@ -44,8 +47,9 @@ defmodule Sandbox.ModuleTransformerTest do
       assert String.contains?(transformed_code, "Enum.map")
       refute String.contains?(transformed_code, "Sandbox_test456_Enum")
 
-      # Should transform MyModule
-      assert String.contains?(transformed_code, "Sandbox_Test456_MyModule")
+      # Should transform MyModule with unique suffix
+      assert String.contains?(transformed_code, "Sandbox_Test456_")
+      assert String.contains?(transformed_code, "_MyModule")
     end
 
     test "transforms module aliases and function calls" do
@@ -64,13 +68,22 @@ defmodule Sandbox.ModuleTransformerTest do
       assert {:ok, transformed_code, module_mapping} =
                ModuleTransformer.transform_source(source, sandbox_id)
 
-      # Should transform both modules
-      assert String.contains?(transformed_code, "Sandbox_Test789_MyModule")
-      assert String.contains?(transformed_code, "Sandbox_Test789_OtherModule")
+      # Should transform both modules with unique suffix
+      assert String.contains?(transformed_code, "Sandbox_Test789_")
+      assert String.contains?(transformed_code, "_MyModule")
+      assert String.contains?(transformed_code, "_OtherModule")
 
       # Should have mappings for both
       assert Map.has_key?(module_mapping, :MyModule)
       assert Map.has_key?(module_mapping, :OtherModule)
+
+      # Verify transformed names follow pattern
+      my_module_name = to_string(module_mapping[:MyModule])
+      other_module_name = to_string(module_mapping[:OtherModule])
+      assert String.starts_with?(my_module_name, "Sandbox_Test789_")
+      assert String.ends_with?(my_module_name, "_MyModule")
+      assert String.starts_with?(other_module_name, "Sandbox_Test789_")
+      assert String.ends_with?(other_module_name, "_OtherModule")
     end
 
     test "handles parse errors gracefully" do
@@ -89,7 +102,9 @@ defmodule Sandbox.ModuleTransformerTest do
   describe "transform_module_name/3" do
     test "transforms regular module names" do
       result = ModuleTransformer.transform_module_name(:MyModule, "test123")
-      assert result == :Sandbox_Test123_MyModule
+      result_str = to_string(result)
+      assert String.starts_with?(result_str, "Sandbox_Test123_")
+      assert String.ends_with?(result_str, "_MyModule")
     end
 
     test "preserves standard library modules" do
@@ -102,7 +117,9 @@ defmodule Sandbox.ModuleTransformerTest do
 
     test "handles string module names" do
       result = ModuleTransformer.transform_module_name("MyModule", "test123")
-      assert result == :Sandbox_Test123_MyModule
+      result_str = to_string(result)
+      assert String.starts_with?(result_str, "Sandbox_Test123_")
+      assert String.ends_with?(result_str, "_MyModule")
     end
   end
 
@@ -216,11 +233,16 @@ defmodule Sandbox.ModuleTransformerTest do
       assert {:ok, transformed_code, module_mapping} =
                ModuleTransformer.transform_source(source, sandbox_id)
 
-      # Should transform both outer and inner modules
-      assert String.contains?(transformed_code, "Sandbox_Nested_Test_Outer")
+      # Should transform both outer and inner modules with unique suffix
+      assert String.contains?(transformed_code, "Sandbox_Nested_Test_")
+      assert String.contains?(transformed_code, "_Outer")
+      assert String.contains?(transformed_code, "_Inner")
 
       # Should have mappings
       assert Map.has_key?(module_mapping, :Outer)
+      outer_name = to_string(module_mapping[:Outer])
+      assert String.starts_with?(outer_name, "Sandbox_Nested_Test_")
+      assert String.ends_with?(outer_name, "_Outer")
     end
 
     test "handles modules with behaviours" do
@@ -239,7 +261,8 @@ defmodule Sandbox.ModuleTransformerTest do
                ModuleTransformer.transform_source(source, sandbox_id)
 
       # Should transform the module but preserve GenServer references
-      assert String.contains?(transformed_code, "Sandbox_Behaviour_Test_MyGenServer")
+      assert String.contains?(transformed_code, "Sandbox_Behaviour_Test_")
+      assert String.contains?(transformed_code, "_MyGenServer")
       assert String.contains?(transformed_code, "@behaviour GenServer")
       assert String.contains?(transformed_code, "use GenServer")
 
