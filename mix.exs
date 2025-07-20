@@ -35,8 +35,8 @@ defmodule Sandbox.MixProject do
       {:file_system, "~> 1.0"},
 
       # Testing infrastructure
-      {:supertester, path: "../supertester"},
-      {:cluster_test, path: "../cluster_test", only: [:dev, :test]},
+      {:supertester, github: "nshkrdotcom/supertester"},
+      {:cluster_test, github: "nshkrdotcom/cluster_test", only: [:dev, :test]},
 
       # Documentation
       {:ex_doc, "~> 0.30", only: :dev, runtime: false},
