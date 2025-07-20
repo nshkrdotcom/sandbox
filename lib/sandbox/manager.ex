@@ -17,6 +17,7 @@ defmodule Sandbox.Manager do
   alias Sandbox.ModuleVersionManager
   alias Sandbox.ModuleTransformer
   alias Sandbox.ProcessIsolator
+  alias Sandbox.VirtualCodeTable
   alias Sandbox.Models.SandboxState
 
   # Public API
@@ -41,7 +42,7 @@ defmodule Sandbox.Manager do
     * `:compile_timeout` - Compilation timeout in milliseconds (default: 30000)
     * `:resource_limits` - Resource limits map (default: medium profile)
     * `:security_profile` - Security profile (:high, :medium, :low, default: :medium)
-    * `:isolation_mode` - Isolation mode (:process, :module, :hybrid, default: :hybrid)
+    * `:isolation_mode` - Isolation mode (:process, :module, :hybrid, :ets, default: :hybrid)
     * `:isolation_level` - For process isolation (:strict, :medium, :relaxed, default: :medium)
     * `:communication_mode` - Inter-sandbox communication (:none, :message_passing, :shared_ets, default: :message_passing)
     * `:auto_reload` - Enable automatic file watching (default: false)
@@ -1111,6 +1112,10 @@ defmodule Sandbox.Manager do
       :hybrid ->
         # Combined approach (Phase 1 + Phase 2) - default
         start_with_hybrid_isolation(sandbox_state)
+
+      :ets ->
+        # ETS-based virtual code tables (Phase 3)
+        start_with_ets_isolation(sandbox_state)
     end
   end
 
@@ -1335,6 +1340,159 @@ defmodule Sandbox.Manager do
     end
   end
 
+  defp start_with_ets_isolation(sandbox_state) do
+    %SandboxState{
+      id: sandbox_id,
+      app_name: app_name,
+      supervisor_module: supervisor_module,
+      config: config
+    } = sandbox_state
+
+    # Phase 3: ETS-based virtual code tables with optional module transformation
+    case Map.get(config, :sandbox_path) do
+      nil ->
+        # No sandbox path, create ETS table and start supervisor directly
+        create_pure_ets_isolation(sandbox_state)
+
+      _sandbox_path ->
+        # Apply module transformation, compile to ETS table, then start supervisor
+        case create_ets_virtual_code_table(sandbox_state) do
+          {:ok, table_ref, updated_state} ->
+            # Start sandbox application with ETS-based module loading
+            case start_sandbox_application_with_ets(
+                   sandbox_id,
+                   app_name,
+                   supervisor_module,
+                   Map.to_list(config),
+                   table_ref
+                 ) do
+              {:ok, app_pid, supervisor_pid, full_opts} ->
+                # Set up monitoring
+                monitor_ref = Process.monitor(supervisor_pid)
+
+                # Extract compile info
+                compile_info = Keyword.get(full_opts, :compile_info, %{})
+                sandbox_path = Keyword.get(full_opts, :sandbox_path)
+
+                # Build artifacts list
+                artifacts =
+                  if sandbox_path && String.starts_with?(sandbox_path, System.tmp_dir!()) do
+                    [sandbox_path | Map.get(compile_info, :beam_files, [])]
+                  else
+                    Map.get(compile_info, :beam_files, [])
+                  end
+
+                # Update sandbox state
+                final_state =
+                  updated_state
+                  |> SandboxState.update_processes(app_pid, supervisor_pid, monitor_ref)
+                  |> SandboxState.update_status(:running)
+                  |> Map.put(:compilation_artifacts, artifacts)
+                  |> Map.put(:isolation_mode, :ets)
+                  |> Map.put(:virtual_code_table, table_ref)
+
+                {:ok, final_state, monitor_ref}
+
+              {:error, reason} ->
+                # Cleanup ETS table on failure
+                VirtualCodeTable.destroy_table(sandbox_id)
+                SandboxState.update_status(sandbox_state, :error)
+                {:error, {:ets_isolation_failed, reason}}
+            end
+
+          {:error, reason} ->
+            SandboxState.update_status(sandbox_state, :error)
+            {:error, {:ets_table_creation_failed, reason}}
+        end
+    end
+  end
+
+  defp create_pure_ets_isolation(sandbox_state) do
+    %SandboxState{
+      id: sandbox_id,
+      supervisor_module: supervisor_module,
+      config: config
+    } = sandbox_state
+
+    # Create ETS table without module compilation
+    case VirtualCodeTable.create_table(sandbox_id) do
+      {:ok, table_ref} ->
+        # Start supervisor directly
+        case supervisor_module.start_link([]) do
+          {:ok, supervisor_pid} ->
+            monitor_ref = Process.monitor(supervisor_pid)
+
+            updated_state =
+              sandbox_state
+              |> SandboxState.update_processes(nil, supervisor_pid, monitor_ref)
+              |> SandboxState.update_status(:running)
+              |> Map.put(:isolation_mode, :ets)
+              |> Map.put(:virtual_code_table, table_ref)
+
+            {:ok, updated_state, monitor_ref}
+
+          {:error, reason} ->
+            VirtualCodeTable.destroy_table(sandbox_id)
+            SandboxState.update_status(sandbox_state, :error)
+            {:error, {:supervisor_start_failed, reason}}
+        end
+
+      {:error, reason} ->
+        SandboxState.update_status(sandbox_state, :error)
+        {:error, {:ets_table_creation_failed, reason}}
+    end
+  end
+
+  defp create_ets_virtual_code_table(sandbox_state) do
+    %SandboxState{
+      id: sandbox_id,
+      config: config
+    } = sandbox_state
+
+    # Create ETS table for virtual code storage
+    case VirtualCodeTable.create_table(sandbox_id) do
+      {:ok, table_ref} ->
+        Logger.info("Created virtual code table for sandbox #{sandbox_id}",
+          table_ref: table_ref
+        )
+
+        updated_state = Map.put(sandbox_state, :virtual_code_table, table_ref)
+        {:ok, table_ref, updated_state}
+
+      {:error, reason} ->
+        Logger.error("Failed to create virtual code table for sandbox #{sandbox_id}",
+          reason: inspect(reason)
+        )
+
+        {:error, reason}
+    end
+  end
+
+  defp start_sandbox_application_with_ets(
+         sandbox_id,
+         app_name,
+         supervisor_module,
+         opts,
+         table_ref
+       ) do
+    # This would be similar to start_sandbox_application but with ETS integration
+    # For now, fall back to standard compilation with ETS storage
+    case start_sandbox_application(sandbox_id, app_name, supervisor_module, opts) do
+      {:ok, app_pid, supervisor_pid, full_opts} = success ->
+        # TODO: Load compiled modules into ETS table
+        # This is where we'd integrate the compiled BEAM files into the virtual code table
+        Logger.debug("ETS-based sandbox application started",
+          sandbox_id: sandbox_id,
+          table_ref: table_ref
+        )
+
+        success
+
+      error ->
+        error
+    end
+  end
+
   defp perform_comprehensive_cleanup(sandbox_state, monitor_ref, state) do
     %SandboxState{
       id: sandbox_id,
@@ -1492,6 +1650,16 @@ defmodule Sandbox.Manager do
 
       if monitor_ref do
         :ets.delete(:sandbox_monitors, monitor_ref)
+      end
+
+      # Cleanup virtual code table if it exists
+      case VirtualCodeTable.destroy_table(sandbox_id) do
+        :ok ->
+          Logger.debug("Cleaned up virtual code table for sandbox #{sandbox_id}")
+
+        {:error, :table_not_found} ->
+          # Table doesn't exist, which is fine
+          :ok
       end
 
       errors
