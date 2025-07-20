@@ -2124,6 +2124,8 @@ defmodule Sandbox.Manager do
          # Compile sandbox application in isolation
          {:ok, compile_info} <-
            compile_sandbox_isolated(sandbox_id, sandbox_path, app_name, opts),
+         # Create the virtual code table to ensure it exists before loading modules
+         {:ok, _table_ref} <- VirtualCodeTable.create_table(sandbox_id),
          :ok <- setup_code_paths(sandbox_id, compile_info),
          :ok <- load_sandbox_modules(sandbox_id, compile_info),
          :ok <- load_sandbox_application(app_name, sandbox_id, compile_info.app_file),
@@ -2205,16 +2207,12 @@ defmodule Sandbox.Manager do
     end
   end
 
-  defp setup_code_paths(_sandbox_id, compile_info) do
-    ebin_path = Path.dirname(List.first(compile_info.beam_files, ""))
-
-    if File.exists?(ebin_path) do
-      Code.prepend_path(ebin_path)
-      Logger.debug("Added code path: #{ebin_path}")
-      :ok
-    else
-      {:error, {:ebin_path_not_found, ebin_path}}
-    end
+  defp setup_code_paths(_sandbox_id, _compile_info) do
+    # This is now a no-op for ETS-based isolation. We must not modify the
+    # global VM code path to ensure true sandbox isolation. Modules will be
+    # loaded into a sandbox-specific VirtualCodeTable (ETS) instead.
+    Logger.debug("Skipping global code path modification for ETS isolation mode.")
+    :ok
   end
 
   defp start_application_and_supervisor(sandbox_id, app_name, supervisor_module, opts) do
@@ -2430,21 +2428,17 @@ defmodule Sandbox.Manager do
   defp load_beam_file(sandbox_id, beam_file) do
     try do
       beam_data = File.read!(beam_file)
+      module = extract_module_from_beam(beam_data)
 
-      # Extract module name from BEAM
-      module =
-        case :beam_lib.info(String.to_charlist(beam_file)) do
-          info when is_list(info) ->
-            Keyword.get(info, :module)
+      unless module do
+        throw({:beam_info_failed, "Could not extract module name from BEAM file: #{beam_file}"})
+      end
 
-          {:error, :beam_lib, reason} ->
-            throw({:beam_info_failed, beam_file, reason})
-        end
-
-      # Load the module
-      case :code.load_binary(module, String.to_charlist(beam_file), beam_data) do
-        {:module, ^module} ->
-          # Register with version manager
+      # Load the module into the sandbox-specific VirtualCodeTable (ETS)
+      # This avoids polluting the global code path.
+      case VirtualCodeTable.load_module(sandbox_id, module, beam_data) do
+        :ok ->
+          # Also register with the version manager for hot-reload capabilities
           case ModuleVersionManager.register_module_version(sandbox_id, module, beam_data) do
             {:ok, version} ->
               Logger.debug("Loaded module #{module} version #{version} for sandbox #{sandbox_id}")
@@ -2454,8 +2448,12 @@ defmodule Sandbox.Manager do
               {:error, {:version_registration_failed, module, reason}}
           end
 
+        # This can happen on restart/reload, which is acceptable.
+        {:error, {:module_already_loaded, ^module}} ->
+          :ok
+
         {:error, reason} ->
-          {:error, {:code_load_failed, module, reason}}
+          {:error, {:virtual_load_failed, module, reason}}
       end
     rescue
       error ->

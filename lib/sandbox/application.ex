@@ -163,15 +163,22 @@ defmodule Sandbox.Application do
 
     Enum.into(tables, %{}, fn table ->
       if :ets.whereis(table) != :undefined do
-        info = :ets.info(table)
+        # The table can be deleted between the whereis/1 and info/1 calls.
+        # We must handle the :undefined case for :ets.info/1.
+        case :ets.info(table) do
+          info when is_list(info) ->
+            {table,
+             %{
+               size: info[:size],
+               memory: info[:memory],
+               type: info[:type],
+               protection: info[:protection]
+             }}
 
-        {table,
-         %{
-           size: info[:size],
-           memory: info[:memory],
-           type: info[:type],
-           protection: info[:protection]
-         }}
+          :undefined ->
+            # The table was deleted after our check, which is fine.
+            {table, :not_found}
+        end
       else
         {table, :not_found}
       end

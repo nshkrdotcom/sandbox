@@ -16,7 +16,9 @@ defmodule Sandbox.MixProject do
       docs: docs(),
       source_url: @source_url,
       homepage_url: @source_url,
-      elixirc_paths: elixirc_paths(Mix.env())
+      elixirc_paths: elixirc_paths(Mix.env()),
+      # Suppress module redefinition warnings during tests (expected behavior for sandbox isolation)
+      elixirc_options: elixirc_options(Mix.env())
     ]
   end
 
@@ -148,4 +150,8 @@ defmodule Sandbox.MixProject do
 
   defp elixirc_paths(:test), do: ["lib", "test/support"]
   defp elixirc_paths(_), do: ["lib"]
+
+  # Suppress module redefinition warnings during tests - they're expected for sandbox isolation
+  defp elixirc_options(:test), do: [ignore_module_conflict: true]
+  defp elixirc_options(_), do: []
 end
