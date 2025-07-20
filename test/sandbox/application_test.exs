@@ -1,13 +1,22 @@
 defmodule Sandbox.ApplicationTest do
   use ExUnit.Case, async: true
 
+  # Clean ETS table contents before each test to ensure isolation
+  # without causing race conditions on table existence
+  setup do
+    for table <- [:sandbox_registry, :sandbox_modules, :sandbox_resources, :sandbox_security] do
+      case :ets.whereis(table) do
+        :undefined -> :ok
+        _ref -> :ets.delete_all_objects(table)
+      end
+    end
+
+    :ok
+  end
 
   describe "ETS table initialization" do
     test "creates all required ETS tables" do
-      # Clean up any existing tables first
-      Sandbox.Application.cleanup_ets_tables()
-
-      # Initialize tables
+      # Initialize tables (idempotent operation)
       :ok = Sandbox.Application.init_ets_tables()
 
       # Verify all tables exist
@@ -24,13 +33,10 @@ defmodule Sandbox.ApplicationTest do
       modules_info = :ets.info(:sandbox_modules)
       assert modules_info[:type] == :bag
       assert modules_info[:protection] == :public
-
-      # Clean up
-      Sandbox.Application.cleanup_ets_tables()
     end
 
     test "get_ets_info returns table information" do
-      Sandbox.Application.cleanup_ets_tables()
+      # Ensure tables exist (idempotent)
       :ok = Sandbox.Application.init_ets_tables()
 
       info = Sandbox.Application.get_ets_info()
@@ -44,29 +50,19 @@ defmodule Sandbox.ApplicationTest do
       assert is_integer(registry_info.size)
       assert is_integer(registry_info.memory)
       assert registry_info.type == :set
-
-      Sandbox.Application.cleanup_ets_tables()
     end
 
-    test "cleanup_ets_tables removes all tables" do
-      # Ensure tables exist first
-      Sandbox.Application.cleanup_ets_tables()
+    test "init_ets_tables is idempotent" do
+      # Call multiple times should not fail
+      :ok = Sandbox.Application.init_ets_tables()
+      :ok = Sandbox.Application.init_ets_tables()
       :ok = Sandbox.Application.init_ets_tables()
 
-      # Verify tables exist
+      # Verify tables still exist and work correctly
       assert :ets.whereis(:sandbox_registry) != :undefined
-
-      # Clean up
-      Sandbox.Application.cleanup_ets_tables()
-
-      # Verify tables are gone
-      assert :ets.whereis(:sandbox_registry) == :undefined
-      assert :ets.whereis(:sandbox_modules) == :undefined
-      assert :ets.whereis(:sandbox_resources) == :undefined
-      assert :ets.whereis(:sandbox_security) == :undefined
-
-      # Recreate tables for other tests
-      :ok = Sandbox.Application.init_ets_tables()
+      assert :ets.whereis(:sandbox_modules) != :undefined
+      assert :ets.whereis(:sandbox_resources) != :undefined
+      assert :ets.whereis(:sandbox_security) != :undefined
     end
   end
 

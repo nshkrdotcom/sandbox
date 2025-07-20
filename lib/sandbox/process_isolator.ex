@@ -17,7 +17,6 @@ defmodule Sandbox.ProcessIsolator do
   use GenServer
   require Logger
 
-
   @doc """
   Starts the process isolator.
   """

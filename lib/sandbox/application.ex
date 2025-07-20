@@ -76,45 +76,62 @@ defmodule Sandbox.Application do
   - `:sandbox_modules` - Module version tracking and metadata
   - `:sandbox_resources` - Resource usage tracking
   - `:sandbox_security` - Security events and audit log
+
+  This function is idempotent and safe to call multiple times.
   """
   def init_ets_tables do
-    # Main sandbox registry - stores sandbox state and metadata
-    :ets.new(:sandbox_registry, [
-      :named_table,
-      :public,
-      :set,
-      {:read_concurrency, true},
-      {:write_concurrency, true}
-    ])
+    tables = [
+      {:sandbox_registry,
+       [
+         :named_table,
+         :public,
+         :set,
+         {:read_concurrency, true},
+         {:write_concurrency, true}
+       ]},
+      {:sandbox_modules,
+       [
+         :named_table,
+         :public,
+         :bag,
+         {:read_concurrency, true},
+         {:write_concurrency, true}
+       ]},
+      {:sandbox_resources,
+       [
+         :named_table,
+         :public,
+         :set,
+         {:read_concurrency, true},
+         {:write_concurrency, true}
+       ]},
+      {:sandbox_security,
+       [
+         :named_table,
+         :public,
+         :ordered_set,
+         {:read_concurrency, true},
+         {:write_concurrency, true}
+       ]}
+    ]
 
-    # Module version tracking
-    :ets.new(:sandbox_modules, [
-      :named_table,
-      :public,
-      # Multiple versions per module
-      :bag,
-      {:read_concurrency, true},
-      {:write_concurrency, true}
-    ])
+    Enum.each(tables, fn {name, opts} ->
+      case :ets.whereis(name) do
+        :undefined ->
+          try do
+            :ets.new(name, opts)
+            Logger.debug("Created ETS table: #{name}")
+          catch
+            :error, :badarg ->
+              # This handles the race condition where another process created the table
+              # between the :ets.whereis/1 check and :ets.new/2 call.
+              Logger.debug("ETS table #{name} was created concurrently by another process")
+          end
 
-    # Resource usage tracking
-    :ets.new(:sandbox_resources, [
-      :named_table,
-      :public,
-      :set,
-      {:read_concurrency, true},
-      {:write_concurrency, true}
-    ])
-
-    # Security events and audit log
-    :ets.new(:sandbox_security, [
-      :named_table,
-      :public,
-      # Ordered by timestamp
-      :ordered_set,
-      {:read_concurrency, true},
-      {:write_concurrency, true}
-    ])
+        _existing_ref ->
+          Logger.debug("ETS table already exists: #{name}")
+      end
+    end)
 
     Logger.debug("ETS tables initialized successfully")
     :ok

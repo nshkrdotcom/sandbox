@@ -353,22 +353,26 @@ defmodule Sandbox.VirtualCodeTable do
       case :beam_lib.info(beam_data) do
         info when is_list(info) ->
           %{
-            attributes: case Keyword.get(info, :attributes) do
-              attrs when is_list(attrs) -> Map.new(attrs)
-              _ -> %{}
-            end,
-            exports: case Keyword.get(info, :exports) do
-              exports when is_list(exports) -> exports
-              _ -> []
-            end,
-            imports: case Keyword.get(info, :imports) do
-              imports when is_list(imports) -> imports
-              _ -> []
-            end,
-            compile_info: case Keyword.get(info, :compile) do
-              compile when is_list(compile) -> Map.new(compile)
-              _ -> %{}
-            end
+            attributes:
+              case Keyword.get(info, :attributes) do
+                attrs when is_list(attrs) -> Map.new(attrs)
+                _ -> %{}
+              end,
+            exports:
+              case Keyword.get(info, :exports) do
+                exports when is_list(exports) -> exports
+                _ -> []
+              end,
+            imports:
+              case Keyword.get(info, :imports) do
+                imports when is_list(imports) -> imports
+                _ -> []
+              end,
+            compile_info:
+              case Keyword.get(info, :compile) do
+                compile when is_list(compile) -> Map.new(compile)
+                _ -> %{}
+              end
           }
 
         {:error, :beam_lib, _reason} ->

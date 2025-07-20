@@ -1,7 +1,6 @@
 defmodule SandboxIntegrationTest do
   use ExUnit.Case, async: true
 
-
   describe "basic sandbox structure" do
     test "application starts with all components" do
       # Verify the application is running

@@ -12,7 +12,6 @@ defmodule Sandbox.ManagerLifecycleTest do
 
   use ExUnit.Case, async: true
 
-
   alias Sandbox.Manager
 
   @moduletag :capture_log
