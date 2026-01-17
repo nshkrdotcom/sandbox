@@ -2626,6 +2626,8 @@ defmodule Sandbox.Manager do
         compile_opts = [
           timeout: Keyword.get(opts, :compile_timeout, 30_000),
           validate_beams: Keyword.get(opts, :validate_beams, true),
+          compiler: :elixirc,
+          in_process: true,
           env: %{
             "MIX_ENV" => "dev",
             "MIX_TARGET" => "host"

@@ -322,9 +322,12 @@ defmodule Sandbox.ProcessIsolator do
       spawn_opts = build_spawn_options(isolation_level, resource_limits)
 
       isolated_pid =
-        spawn(fn ->
-          isolated_process_main(isolation_config)
-        end)
+        :proc_lib.spawn_opt(
+          fn ->
+            isolated_process_main(isolation_config)
+          end,
+          spawn_opts
+        )
 
       # Set up initial resource monitoring
       isolation_data = %{
@@ -340,7 +343,7 @@ defmodule Sandbox.ProcessIsolator do
   end
 
   defp build_spawn_options(isolation_level, resource_limits) do
-    base_opts = [:link, :monitor]
+    base_opts = []
 
     # Add isolation-specific options
     case isolation_level do

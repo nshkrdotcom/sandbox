@@ -1,5 +1,9 @@
 defmodule Sandbox.IsolatedCompilerPerformanceTest do
-  use Sandbox.TestCase
+  use ExUnit.Case, async: false
+
+  @moduletag :capture_log
+
+  import Sandbox.TestHelpers
   import Supertester.Assertions
 
   alias Sandbox.IsolatedCompiler
@@ -367,8 +371,7 @@ defmodule Sandbox.IsolatedCompilerPerformanceTest do
       @moduledoc "Module #{i} for performance testing"
 
       def complex_func_#{i}(x) when is_integer(x) do
-        x
-        |> Enum.range(1)
+        1..x
         |> Enum.map(&(&1 * #{i}))
         |> Enum.sum()
       end

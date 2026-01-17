@@ -13,6 +13,7 @@ defmodule Sandbox.IsolatedCompiler do
   @default_memory_limit 256 * 1024 * 1024
   @temp_dir_prefix "sandbox_"
   @cache_dir_name ".sandbox_cache"
+  @epoch_seconds :calendar.datetime_to_gregorian_seconds({{1970, 1, 1}, {0, 0, 0}})
 
   @type compile_result :: {:ok, compile_info()} | {:error, compile_error()}
   @type compile_info :: %{
@@ -36,8 +37,13 @@ defmodule Sandbox.IsolatedCompiler do
           {:compilation_failed, exit_code :: non_neg_integer(), output :: String.t()}
           | {:compilation_timeout, timeout :: non_neg_integer()}
           | {:compiler_crash, kind :: atom(), error :: any()}
+          | {:compiler_crash, kind :: atom(), error :: any(), context :: map()}
           | {:invalid_sandbox_path, path :: String.t()}
           | {:beam_validation_failed, reason :: String.t()}
+          | {:resource_limit_exceeded, limit_type :: atom(), details :: map()}
+          | {:resource_monitor_failed, reason :: any()}
+          | {:security_threats_detected, threats :: list()}
+          | {:security_scan_failed, reason :: any()}
 
   @type compile_opts :: [
           timeout: non_neg_integer(),
@@ -49,7 +55,10 @@ defmodule Sandbox.IsolatedCompiler do
           incremental: boolean(),
           force_recompile: boolean(),
           cache_enabled: boolean(),
+          skip_cache: boolean(),
           dependency_analysis: boolean(),
+          in_process: boolean(),
+          source_files: [String.t()],
           cpu_limit: float(),
           max_processes: non_neg_integer(),
           security_scan: boolean(),
@@ -80,11 +89,12 @@ defmodule Sandbox.IsolatedCompiler do
     incremental = Keyword.get(opts, :incremental, false)
     force_recompile = Keyword.get(opts, :force_recompile, false)
     cache_enabled = Keyword.get(opts, :cache_enabled, true)
+    skip_cache = Keyword.get(opts, :skip_cache, false)
 
     start_time = System.monotonic_time(:millisecond)
 
     # Check cache first if incremental compilation is enabled and not forcing recompile
-    if incremental and cache_enabled and not force_recompile do
+    if incremental and cache_enabled and not force_recompile and not skip_cache do
       case try_cached_compilation(sandbox_path, opts) do
         {:ok, cached_result} ->
           {:ok, cached_result}
@@ -289,11 +299,13 @@ defmodule Sandbox.IsolatedCompiler do
       :incremental ->
         # Enhance opts with incremental information
         enhanced_opts =
-          Keyword.merge(opts,
-            incremental: true,
-            changed_files: compilation_scope.changed_files || files_to_compile,
-            compilation_strategy: strategy,
-            function_only_changes: compilation_scope.function_only_changes
+          prepare_incremental_opts(
+            opts,
+            cache_dir,
+            sandbox_path,
+            files_to_compile,
+            strategy,
+            compilation_scope.function_only_changes
           )
 
         perform_function_level_compilation(sandbox_path, compilation_scope, enhanced_opts)
@@ -302,11 +314,13 @@ defmodule Sandbox.IsolatedCompiler do
       :full ->
         # Enhance opts with incremental information
         enhanced_opts =
-          Keyword.merge(opts,
-            incremental: true,
-            changed_files: compilation_scope.changed_files || files_to_compile,
-            compilation_strategy: strategy,
-            function_only_changes: compilation_scope.function_only_changes
+          prepare_incremental_opts(
+            opts,
+            cache_dir,
+            sandbox_path,
+            files_to_compile,
+            strategy,
+            compilation_scope.function_only_changes
           )
 
         compile_sandbox(sandbox_path, enhanced_opts)
@@ -317,13 +331,148 @@ defmodule Sandbox.IsolatedCompiler do
   defp perform_incremental_compilation(sandbox_path, files_to_compile, cache_dir, opts)
        when is_list(files_to_compile) do
     # Legacy path for backward compatibility
-    enhanced_opts = Keyword.merge(opts, incremental: true, changed_files: files_to_compile)
+    enhanced_opts =
+      prepare_incremental_opts(
+        opts,
+        cache_dir,
+        sandbox_path,
+        files_to_compile,
+        :full,
+        []
+      )
 
     compile_sandbox(sandbox_path, enhanced_opts)
     |> handle_incremental_result(cache_dir, sandbox_path, %{
       files: files_to_compile,
       strategy: :full
     })
+  end
+
+  defp prepare_incremental_opts(
+         opts,
+         cache_dir,
+         sandbox_path,
+         files_to_compile,
+         strategy,
+         function_only_changes
+       ) do
+    cache_enabled = Keyword.get(opts, :cache_enabled, true)
+    source_files = build_source_files(sandbox_path, files_to_compile)
+
+    opts
+    |> Keyword.merge(
+      incremental: true,
+      skip_cache: true,
+      changed_files: files_to_compile,
+      compilation_strategy: strategy,
+      function_only_changes: function_only_changes
+    )
+    |> maybe_put_source_files(source_files)
+    |> maybe_put_incremental_compiler(strategy, source_files)
+    |> maybe_put_in_process(strategy, source_files)
+    |> maybe_reuse_temp_dir(cache_dir, cache_enabled)
+    |> maybe_force_recompile(strategy)
+  end
+
+  defp build_source_files(sandbox_path, files_to_compile) do
+    files_to_compile
+    |> Enum.map(&expand_source_file(sandbox_path, &1))
+    |> Enum.filter(&String.ends_with?(&1, ".ex"))
+  end
+
+  defp expand_source_file(sandbox_path, file) do
+    file = to_string(file)
+
+    case Path.type(file) do
+      :absolute -> file
+      _ -> Path.join(sandbox_path, file)
+    end
+  end
+
+  defp maybe_put_source_files(opts, []), do: opts
+
+  defp maybe_put_source_files(opts, files) do
+    Keyword.put(opts, :source_files, files)
+  end
+
+  defp maybe_put_incremental_compiler(opts, :incremental, source_files) do
+    cond do
+      Keyword.has_key?(opts, :compiler) ->
+        opts
+
+      source_files == [] ->
+        opts
+
+      true ->
+        Keyword.put(opts, :compiler, :elixirc)
+    end
+  end
+
+  defp maybe_put_incremental_compiler(opts, _strategy, _source_files), do: opts
+
+  defp maybe_put_in_process(opts, :incremental, source_files) do
+    cond do
+      Keyword.has_key?(opts, :in_process) ->
+        opts
+
+      Keyword.get(opts, :compiler) != :elixirc ->
+        opts
+
+      source_files == [] ->
+        opts
+
+      length(source_files) > 5 ->
+        opts
+
+      true ->
+        Keyword.put(opts, :in_process, true)
+    end
+  end
+
+  defp maybe_put_in_process(opts, _strategy, _source_files), do: opts
+
+  defp maybe_reuse_temp_dir(opts, _cache_dir, false), do: opts
+
+  defp maybe_reuse_temp_dir(opts, cache_dir, true) do
+    if Keyword.has_key?(opts, :temp_dir) do
+      opts
+    else
+      case get_cached_temp_dir(cache_dir) do
+        {:ok, temp_dir} -> Keyword.put(opts, :temp_dir, temp_dir)
+        _ -> opts
+      end
+    end
+  end
+
+  defp maybe_force_recompile(opts, :full) do
+    Keyword.put(opts, :force_recompile, true)
+  end
+
+  defp maybe_force_recompile(opts, _strategy), do: opts
+
+  defp get_cached_temp_dir(cache_dir) do
+    cache_file = Path.join(cache_dir, "last_compilation.json")
+
+    if File.exists?(cache_file) do
+      try do
+        cached_data =
+          cache_file
+          |> File.read!()
+          |> Jason.decode!(keys: :atoms)
+
+        temp_dir = Map.get(cached_data, :temp_dir)
+
+        if is_binary(temp_dir) and File.dir?(temp_dir) do
+          {:ok, temp_dir}
+        else
+          {:error, :missing_temp_dir}
+        end
+      rescue
+        _ -> {:error, :invalid_cache}
+      end
+    else
+      {:error, :no_cache}
+    end
   end
 
   defp perform_function_level_compilation(sandbox_path, compilation_scope, opts) do
@@ -351,32 +500,30 @@ defmodule Sandbox.IsolatedCompiler do
     )
 
     # For now, compile normally but with optimized settings
-    # IMPORTANT: Disable cache since we've already detected changes
     optimized_opts =
       Keyword.merge(opts,
         incremental: true,
         function_level: true,
         # Skip validation for faster compilation
-        validate_beams: false,
-        # Disable cache since files have changed
-        cache_enabled: false,
-        # Force recompilation of changed files
-        force_recompile: true
+        validate_beams: false
       )
 
     compile_sandbox(sandbox_path, optimized_opts)
   end
 
-  defp handle_incremental_result(result, cache_dir, sandbox_path, compilation_scope) do
+  defp handle_incremental_result(result, _cache_dir, _sandbox_path, compilation_scope) do
     case result do
       {:ok, compile_info} ->
-        # Update cache with new compilation result
-        update_compilation_cache(cache_dir, sandbox_path, compile_info)
+        compiled_files =
+          Map.get(compilation_scope, :files, Map.get(compilation_scope, :changed_files, []))
+
+        original_changed_files = Map.get(compilation_scope, :changed_files, compiled_files)
 
         enhanced_info =
           Map.merge(compile_info, %{
             incremental: true,
-            changed_files: compilation_scope.changed_files || compilation_scope.files,
+            changed_files: compiled_files,
+            original_changed_files: original_changed_files,
             cache_hit: false,
             compilation_strategy: compilation_scope.strategy || :full
           })
@@ -496,7 +643,8 @@ defmodule Sandbox.IsolatedCompiler do
         cpu_limit: cpu_limit,
         max_processes: max_processes,
         env: env,
-        compiler: compiler
+        compiler: compiler,
+        compile_opts: opts
       }
 
       do_compile_in_isolation(compile_context)
@@ -523,7 +671,8 @@ defmodule Sandbox.IsolatedCompiler do
       cpu_limit: cpu_limit,
       max_processes: max_processes,
       env: env,
-      compiler: compiler
+      compiler: compiler,
+      compile_opts: compile_opts
     } = ctx
 
     # Set up isolated build environment with comprehensive resource constraints
@@ -549,51 +698,54 @@ defmodule Sandbox.IsolatedCompiler do
     resource_monitor = spawn_enhanced_resource_monitor(memory_limit, cpu_limit, max_processes)
 
     compiler_pid =
-      spawn(fn ->
-        try do
-          # Set comprehensive resource limits and isolation
-          set_enhanced_resource_limits(memory_limit, cpu_limit, max_processes)
+      :proc_lib.spawn_opt(
+        fn ->
+          try do
+            # Set comprehensive resource limits and isolation
+            set_enhanced_resource_limits(memory_limit, cpu_limit, max_processes)
 
-          # Create isolated compilation environment
-          setup_compilation_isolation(temp_dir)
+            # Create isolated compilation environment
+            setup_compilation_isolation(temp_dir)
 
-          # Store original directory but don't change to sandbox directory
-          # This avoids issues with concurrent tests cleaning up directories
-          _original_cwd =
-            case File.cwd() do
-              {:ok, cwd} -> cwd
-              {:error, _} -> "/tmp"
-            end
+            # Store original directory but don't change to sandbox directory
+            # This avoids issues with concurrent tests cleaning up directories
+            _original_cwd =
+              case File.cwd() do
+                {:ok, cwd} -> cwd
+                {:error, _} -> "/tmp"
+              end
 
-          validate_sandbox_safety(sandbox_path)
+            validate_sandbox_safety(sandbox_path)
 
-          # Start enhanced resource monitoring
-          send(resource_monitor, {:monitor_process, self()})
+            # Start enhanced resource monitoring
+            send(resource_monitor, {:monitor_process, self()})
 
-          # Compile with timeout and resource monitoring
-          {result, exit_code} = compile_with(compiler, sandbox_path, build_env)
+            # Compile with timeout and resource monitoring
+            {result, exit_code} = compile_with(compiler, sandbox_path, build_env, compile_opts)
 
-          # Parse warnings and perform post-compilation security checks
-          warnings = parse_compilation_warnings(result)
-          security_warnings = perform_post_compilation_security_check(temp_dir)
+            # Parse warnings and perform post-compilation security checks
+            warnings = parse_compilation_warnings(result)
+            security_warnings = perform_post_compilation_security_check(temp_dir)
 
-          # No need to restore working directory since we didn't change it
+            # No need to restore working directory since we didn't change it
 
-          send(parent, {:compilation_result, exit_code, result, warnings ++ security_warnings})
-        catch
-          kind, error ->
-            # Enhanced error reporting with security context
-            error_context = %{
-              kind: kind,
-              error: error,
-              pid: self(),
-              sandbox_path: sandbox_path,
-              timestamp: DateTime.utc_now()
-            }
+            send(parent, {:compilation_result, exit_code, result, warnings ++ security_warnings})
+          catch
+            kind, error ->
+              # Enhanced error reporting with security context
+              error_context = %{
+                kind: kind,
+                error: error,
+                pid: self(),
+                sandbox_path: sandbox_path,
+                timestamp: DateTime.utc_now()
+              }
 
-            send(parent, {:compilation_error, kind, error, error_context})
-        end
-      end)
+              send(parent, {:compilation_error, kind, error, error_context})
+          end
+        end,
+        []
+      )
 
     # Monitor compiler process with enhanced monitoring
     compiler_ref = Process.monitor(compiler_pid)
@@ -605,28 +757,28 @@ defmodule Sandbox.IsolatedCompiler do
     receive do
       {:compilation_result, 0, output, warnings} ->
         Process.cancel_timer(timeout_timer)
-        cleanup_monitors(compiler_ref, resource_ref, resource_monitor)
+        cleanup_monitors(compiler_ref, compiler_pid, resource_ref, resource_monitor)
         {:ok, output, warnings}
 
-      {:compilation_result, exit_code, output, warnings} ->
+      {:compilation_result, exit_code, output, _warnings} ->
         Process.cancel_timer(timeout_timer)
-        cleanup_monitors(compiler_ref, resource_ref, resource_monitor)
-        {:error, {:compilation_failed, exit_code, output, warnings}}
+        cleanup_monitors(compiler_ref, compiler_pid, resource_ref, resource_monitor)
+        {:error, {:compilation_failed, exit_code, output}}
 
       {:compilation_error, kind, error, context} ->
         Process.cancel_timer(timeout_timer)
-        cleanup_monitors(compiler_ref, resource_ref, resource_monitor)
+        cleanup_monitors(compiler_ref, compiler_pid, resource_ref, resource_monitor)
         {:error, {:compiler_crash, kind, error, context}}
 
       {:resource_limit_exceeded, limit_type, details} ->
         Process.cancel_timer(timeout_timer)
         gracefully_terminate_compiler(compiler_pid, 1000)
-        cleanup_monitors(compiler_ref, resource_ref, resource_monitor)
+        cleanup_monitors(compiler_ref, compiler_pid, resource_ref, resource_monitor)
         {:error, {:resource_limit_exceeded, limit_type, details}}
 
       {:DOWN, ^compiler_ref, :process, ^compiler_pid, reason} ->
         Process.cancel_timer(timeout_timer)
-        cleanup_monitors(compiler_ref, resource_ref, resource_monitor)
+        cleanup_monitors(compiler_ref, compiler_pid, resource_ref, resource_monitor)
         {:error, {:compiler_crash, :process_down, reason}}
 
       {:DOWN, ^resource_ref, :process, ^resource_monitor, reason} ->
@@ -637,64 +789,101 @@ defmodule Sandbox.IsolatedCompiler do
 
       {:compilation_timeout, timeout_value} ->
         gracefully_terminate_compiler(compiler_pid, 2000)
-        cleanup_monitors(compiler_ref, resource_ref, resource_monitor)
+        cleanup_monitors(compiler_ref, compiler_pid, resource_ref, resource_monitor)
         {:error, {:compilation_timeout, timeout_value}}
     end
   end
 
-  defp compile_with(:mix, sandbox_path, build_env) do
-    # First try in-process compilation for test environments
-    if in_test_environment?() do
-      Logger.debug("Using in-process compilation for test environment")
-      compile_with(:in_process, sandbox_path, build_env)
-    else
-      Logger.debug("Using external elixir compilation")
-      # Use the same Elixir executable that's running the current process
-      elixir_path = System.find_executable("elixir") || System.find_executable("mix") || "mix"
+  defp compile_with(:mix, sandbox_path, build_env, opts) do
+    use_in_process = Keyword.get(opts, :in_process, false)
+    incremental = Keyword.get(opts, :incremental, false)
+    force_recompile = Keyword.get(opts, :force_recompile, false)
 
-      System.cmd(elixir_path, ["-S", "mix", "compile", "--force"],
-        stderr_to_stdout: true,
-        env: build_env
-      )
-    end
-  end
+    {cmd, base_args} =
+      case System.find_executable("elixir") do
+        nil ->
+          case System.find_executable("mix") do
+            nil -> {nil, []}
+            mix_path -> {mix_path, ["compile"]}
+          end
 
-  defp compile_with(:elixirc, sandbox_path, build_env) do
-    # Use in-process compilation for test environments
-    if in_test_environment?() do
-      Logger.debug("Using in-process compilation for elixirc in test environment")
-      compile_with(:in_process, sandbox_path, build_env)
-    else
-      files = Path.wildcard(Path.join(sandbox_path, "*.ex"))
-      elixirc_path = System.find_executable("elixirc") || "elixirc"
-
-      if files != [] do
-        ebin_dir = Path.join(sandbox_path, "ebin")
-        File.mkdir_p!(ebin_dir)
-
-        System.cmd(elixirc_path, files ++ ["-o", ebin_dir], stderr_to_stdout: true)
-      else
-        {"No .ex files found to compile", 0}
+        elixir_path ->
+          {elixir_path, ["-S", "mix", "compile"]}
       end
+
+    cond do
+      use_in_process or is_nil(cmd) ->
+        Logger.debug("Using in-process compilation for mix", use_in_process: use_in_process)
+        compile_with(:in_process, sandbox_path, build_env, opts)
+
+      true ->
+        Logger.debug("Using external elixir compilation")
+
+        args =
+          base_args
+          |> then(fn base ->
+            if force_recompile or not incremental do
+              base ++ ["--force"]
+            else
+              base
+            end
+          end)
+
+        System.cmd(cmd, args,
+          stderr_to_stdout: true,
+          env: build_env,
+          cd: sandbox_path
+        )
     end
   end
 
-  defp compile_with(:erlc, sandbox_path, _build_env) do
-    files = Path.wildcard(Path.join(sandbox_path, "*.erl"))
+  defp compile_with(:elixirc, sandbox_path, build_env, opts) do
+    use_in_process = Keyword.get(opts, :in_process, false)
+    elixirc_path = System.find_executable("elixirc")
+
+    cond do
+      use_in_process or is_nil(elixirc_path) ->
+        Logger.debug("Using in-process compilation for elixirc", use_in_process: use_in_process)
+        compile_with(:in_process, sandbox_path, build_env, opts)
+
+      true ->
+        files =
+          case Keyword.get(opts, :source_files, []) do
+            [] -> Path.wildcard(Path.join([sandbox_path, "lib", "**", "*.ex"]))
+            source_files -> Enum.map(source_files, &Path.expand(&1, sandbox_path))
+          end
+
+        if files != [] do
+          output_path = resolve_elixirc_output_path(sandbox_path, build_env)
+          File.mkdir_p!(output_path)
+
+          args = ["-pa", output_path, "-o", output_path] ++ files
+
+          System.cmd(elixirc_path, args,
+            stderr_to_stdout: true,
+            env: build_env,
+            cd: sandbox_path
+          )
+        else
+          {"No .ex files found to compile", 0}
+        end
+    end
+  end
+
+  defp compile_with(:erlc, sandbox_path, _build_env, _opts) do
+    files = Path.wildcard(Path.join([sandbox_path, "**", "*.erl"]))
     System.cmd("erlc", files ++ ["-o", Path.join(sandbox_path, "ebin")], stderr_to_stdout: true)
   end
 
-  defp compile_with(:in_process, sandbox_path, build_env) do
+  defp compile_with(:in_process, sandbox_path, build_env, opts) do
     alias Sandbox.InProcessCompiler
 
     # Use the build path from environment if available, otherwise use standard location
-    temp_dir = Map.get(build_env, "MIX_BUILD_PATH", Path.join(sandbox_path, "_build/test"))
-    app_name = extract_app_name(sandbox_path)
-    output_path = Path.join([temp_dir, "lib", to_string(app_name), "ebin"])
+    output_path = resolve_elixirc_output_path(sandbox_path, build_env)
 
     Logger.debug("In-process compilation output path: #{output_path}")
 
-    case InProcessCompiler.compile_in_process(sandbox_path, output_path) do
+    case InProcessCompiler.compile_in_process(sandbox_path, output_path, opts) do
       {:ok, %{beam_files: beam_files, warnings: warnings}} ->
         # Format output to match expected format
         output = format_in_process_output(beam_files, warnings)
@@ -702,10 +891,13 @@ defmodule Sandbox.IsolatedCompiler do
 
       {:error, %{errors: errors, warnings: warnings}} ->
         output = format_in_process_errors(errors, warnings)
+        IO.puts(:stderr, output)
         {output, 1}
 
       {:error, reason} ->
-        {"Compilation error: #{inspect(reason)}", 1}
+        output = "Compilation error: #{inspect(reason)}"
+        IO.puts(:stderr, output)
+        {output, 1}
     end
   end
 
@@ -774,6 +966,17 @@ defmodule Sandbox.IsolatedCompiler do
   defp maybe_validate_beams(beam_files, true), do: validate_compilation(beam_files)
   defp maybe_validate_beams(_beam_files, false), do: :ok
 
+  defp resolve_elixirc_output_path(sandbox_path, build_env) do
+    temp_dir = Map.get(build_env, "MIX_BUILD_PATH")
+    app_name = extract_app_name(sandbox_path)
+
+    if is_binary(temp_dir) do
+      Path.join([temp_dir, "lib", to_string(app_name), "ebin"])
+    else
+      Path.join(sandbox_path, "ebin")
+    end
+  end
+
   defp validate_beam_file(beam_file) do
     case :beam_lib.info(String.to_charlist(beam_file)) do
       {:error, :beam_lib, reason} ->
@@ -805,12 +1008,32 @@ defmodule Sandbox.IsolatedCompiler do
     {"Compiler crash (#{kind})", inspect(error)}
   end
 
+  defp format_error_details({:compiler_crash, kind, error, _context}) do
+    {"Compiler crash (#{kind})", inspect(error)}
+  end
+
   defp format_error_details({:invalid_sandbox_path, reason}) do
     {"Invalid sandbox path", reason}
   end
 
   defp format_error_details({:beam_validation_failed, reason}) do
     {"BEAM validation failed", reason}
+  end
+
+  defp format_error_details({:resource_limit_exceeded, limit_type, details}) do
+    {"Resource limit exceeded (#{limit_type})", inspect(details)}
+  end
+
+  defp format_error_details({:resource_monitor_failed, reason}) do
+    {"Resource monitor failed", inspect(reason)}
+  end
+
+  defp format_error_details({:security_threats_detected, threats}) do
+    {"Security threats detected", inspect(threats)}
+  end
+
+  defp format_error_details({:security_scan_failed, reason}) do
+    {"Security scan failed", inspect(reason)}
   end
 
   defp format_error_details(other) do
@@ -825,6 +1048,37 @@ defmodule Sandbox.IsolatedCompiler do
     case File.mkdir_p(cache_dir) do
       :ok -> {:ok, cache_dir}
       {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp with_cache_lock(cache_dir, fun) do
+    lock_key = {:cache_lock, cache_dir}
+
+    case :global.trans(lock_key, fun, [node()], 30_000) do
+      :aborted ->
+        Logger.warning("Cache lock acquisition timed out", cache_dir: cache_dir)
+        {:error, :cache_lock_timeout}
+
+      result ->
+        result
+    end
+  end
+
+  defp write_json_atomic(path, data) do
+    dir = Path.dirname(path)
+    tmp_path = Path.join(dir, ".#{Path.basename(path)}.#{random_string(6)}.tmp")
+
+    try do
+      File.write!(tmp_path, Jason.encode!(data))
+      File.rename!(tmp_path, path)
+      :ok
+    rescue
+      error ->
+        if File.exists?(tmp_path) do
+          File.rm(tmp_path)
+        end
+
+        raise error
     end
   end
 
@@ -851,11 +1105,10 @@ defmodule Sandbox.IsolatedCompiler do
 
   defp detect_changes_by_hash(sandbox_path, cache_dir) do
     hash_file = Path.join(cache_dir, "file_hashes.json")
-    current_hashes = calculate_file_hashes(sandbox_path)
+    previous_hashes = load_previous_hashes(hash_file)
+    current_hashes = calculate_file_hashes(sandbox_path, previous_hashes)
 
     Logger.debug("Current files: #{inspect(Map.keys(current_hashes))}")
-
-    previous_hashes = load_previous_hashes(hash_file)
 
     {content_changed, function_changed} =
       detect_hash_changes(current_hashes, previous_hashes)
@@ -870,7 +1123,11 @@ defmodule Sandbox.IsolatedCompiler do
     all_changed_files =
       Enum.uniq(content_changed ++ function_changed ++ new_files ++ deleted_files)
 
-    save_hash_file(hash_file, current_hashes)
+    if all_changed_files != [] do
+      save_hash_file(hash_file, current_hashes)
+    else
+      Logger.debug("No hash changes detected, skipping hash file update")
+    end
 
     {:ok,
      %{
@@ -993,14 +1250,14 @@ defmodule Sandbox.IsolatedCompiler do
   end
 
   defp save_hash_file(hash_file, current_hashes) do
-    File.write!(hash_file, Jason.encode!(current_hashes))
+    write_json_atomic(hash_file, current_hashes)
     Logger.debug("Updated hash file with #{map_size(current_hashes)} entries")
   rescue
     error ->
       Logger.warning("Failed to write hash file: #{inspect(error)}")
   end
 
-  defp calculate_file_hashes(sandbox_path) do
+  defp calculate_file_hashes(sandbox_path, previous_hashes \\ %{}) do
     patterns = [
       Path.join(sandbox_path, "**/*.ex"),
       Path.join(sandbox_path, "**/*.exs"),
@@ -1014,30 +1271,65 @@ defmodule Sandbox.IsolatedCompiler do
     |> Enum.reduce(%{}, fn file, acc ->
       try do
         relative_path = Path.relative_to(file, sandbox_path)
-        content = File.read!(file)
+        stat = File.stat!(file)
+        modified_time = file_stat_modified_time(stat)
+        previous_info = Map.get(previous_hashes, relative_path, %{})
 
-        # Content from File.read! is always binary
-        binary_content = content
+        if can_reuse_hash_info?(previous_info, stat, modified_time) do
+          Map.put(
+            acc,
+            relative_path,
+            normalize_hash_info(previous_info, stat.size, modified_time)
+          )
+        else
+          content = File.read!(file)
 
-        # Calculate both content hash and function-level hash for incremental compilation
-        content_hash =
-          :crypto.hash(:sha256, binary_content)
-          |> Base.encode16(case: :lower)
+          # Content from File.read! is always binary
+          binary_content = content
 
-        function_hash = calculate_function_level_hash(binary_content)
+          # Calculate both content hash and function-level hash for incremental compilation
+          content_hash =
+            :crypto.hash(:sha256, binary_content)
+            |> Base.encode16(case: :lower)
 
-        Map.put(acc, relative_path, %{
-          content_hash: content_hash,
-          function_hash: function_hash,
-          size: byte_size(binary_content),
-          modified_time: get_file_modified_time(file)
-        })
+          function_hash = calculate_function_level_hash(binary_content)
+
+          Map.put(acc, relative_path, %{
+            content_hash: content_hash,
+            function_hash: function_hash,
+            size: byte_size(binary_content),
+            modified_time: modified_time
+          })
+        end
       rescue
         error ->
           Logger.warning("Failed to hash file #{file}: #{inspect(error)}")
           acc
       end
     end)
+  end
+
+  defp can_reuse_hash_info?(previous_info, %File.Stat{size: size}, modified_time) do
+    previous_size = get_hash_value(previous_info, :size)
+    previous_mtime = get_hash_value(previous_info, :modified_time)
+    content_hash = get_hash_value(previous_info, :content_hash)
+    function_hash = get_hash_value(previous_info, :function_hash)
+
+    previous_size == size and previous_mtime == modified_time and
+      not is_nil(content_hash) and not is_nil(function_hash)
+  end
+
+  defp normalize_hash_info(previous_info, size, modified_time) do
+    %{
+      content_hash: get_hash_value(previous_info, :content_hash),
+      function_hash: get_hash_value(previous_info, :function_hash),
+      size: size,
+      modified_time: modified_time
+    }
+  end
+
+  defp file_stat_modified_time(%File.Stat{mtime: mtime}) do
+    :calendar.datetime_to_gregorian_seconds(mtime) - @epoch_seconds
   end
 
   defp calculate_function_level_hash(content) when is_binary(content) do
@@ -1089,18 +1381,6 @@ defmodule Sandbox.IsolatedCompiler do
       {name, _meta, args} -> {name, [], args}
       other -> other
     end)
-  end
-
-  defp get_file_modified_time(file_path) do
-    case File.stat(file_path) do
-      {:ok, %File.Stat{mtime: mtime}} ->
-        # Convert to Unix timestamp for JSON serialization
-        :calendar.datetime_to_gregorian_seconds(mtime) -
-          :calendar.datetime_to_gregorian_seconds({{1970, 1, 1}, {0, 0, 0}})
-
-      {:error, _} ->
-        0
-    end
   end
 
   defp determine_compilation_scope(change_info, false, _sandbox_path) when is_map(change_info) do
@@ -1199,27 +1479,27 @@ defmodule Sandbox.IsolatedCompiler do
       Macro.prewalk(ast, [], fn
         # Import statements
         {:import, _meta, [{:__aliases__, _, modules}]} = node, acc ->
-          module_name = Module.concat(modules)
+          module_name = normalize_module_name(Module.concat(modules))
           {node, [module_name | acc]}
 
         # Alias statements
         {:alias, _meta, [{:__aliases__, _, modules}]} = node, acc ->
-          module_name = Module.concat(modules)
+          module_name = normalize_module_name(Module.concat(modules))
           {node, [module_name | acc]}
 
         # Use statements
         {:use, _meta, [{:__aliases__, _, modules} | _]} = node, acc ->
-          module_name = Module.concat(modules)
+          module_name = normalize_module_name(Module.concat(modules))
           {node, [module_name | acc]}
 
         # Module calls (e.g., MyModule.function())
         {{:., _, [{:__aliases__, _, modules}, _function]}, _, _args} = node, acc ->
-          module_name = Module.concat(modules)
+          module_name = normalize_module_name(Module.concat(modules))
           {node, [module_name | acc]}
 
         # Struct references (e.g., %MyModule{})
         {:%, _, [{:__aliases__, _, modules}, _fields]} = node, acc ->
-          module_name = Module.concat(modules)
+          module_name = normalize_module_name(Module.concat(modules))
           {node, [module_name | acc]}
 
         node, acc ->
@@ -1228,7 +1508,6 @@ defmodule Sandbox.IsolatedCompiler do
 
     dependencies
     |> Enum.uniq()
-    |> Enum.map(&to_string/1)
   end
 
   defp extract_dependencies_with_regex(content) do
@@ -1291,7 +1570,7 @@ defmodule Sandbox.IsolatedCompiler do
       end)
 
     try do
-      File.write!(cache_file, Jason.encode!(cache_data))
+      write_json_atomic(cache_file, cache_data)
     rescue
       error ->
         Logger.warning("Failed to cache dependencies: #{inspect(error)}")
@@ -1376,6 +1655,8 @@ defmodule Sandbox.IsolatedCompiler do
               compilation_strategy: Map.get(cached_data, :compilation_strategy, :full)
             }
 
+            update_cache_statistics(cache_dir, compile_info, [])
+
             {:ok, compile_info}
 
           :invalid ->
@@ -1425,6 +1706,7 @@ defmodule Sandbox.IsolatedCompiler do
 
   defp update_compilation_cache(cache_dir, sandbox_path, compile_info) do
     cache_file = Path.join(cache_dir, "last_compilation.json")
+    hash_file = Path.join(cache_dir, "file_hashes.json")
 
     cache_data = %{
       output: compile_info.output,
@@ -1440,32 +1722,33 @@ defmodule Sandbox.IsolatedCompiler do
     }
 
     try do
-      File.write!(cache_file, Jason.encode!(cache_data))
+      current_hashes = calculate_file_hashes(sandbox_path)
 
-      # Update file hashes
-      update_file_hashes(cache_dir, sandbox_path)
-
-      # Also update cache statistics
-      update_cache_statistics(cache_dir, compile_info)
+      with_cache_lock(cache_dir, fn ->
+        write_json_atomic(cache_file, cache_data)
+        write_json_atomic(hash_file, current_hashes)
+        update_cache_statistics(cache_dir, compile_info, locked: true)
+      end)
     rescue
       error ->
         Logger.warning("Failed to update compilation cache: #{inspect(error)}")
     end
   end
 
-  defp update_file_hashes(cache_dir, sandbox_path) do
-    hash_file = Path.join(cache_dir, "file_hashes.json")
-    current_hashes = calculate_file_hashes(sandbox_path)
+  defp update_cache_statistics(cache_dir, compile_info, opts) do
+    cond do
+      Keyword.get(opts, :locked, false) ->
+        do_update_cache_statistics(cache_dir, compile_info)
 
-    try do
-      File.write!(hash_file, Jason.encode!(current_hashes))
-    rescue
-      error ->
-        Logger.warning("Failed to update file hashes: #{inspect(error)}")
+      Keyword.get(opts, :skip_lock, false) ->
+        do_update_cache_statistics(cache_dir, compile_info)
+
+      true ->
+        with_cache_lock(cache_dir, fn -> do_update_cache_statistics(cache_dir, compile_info) end)
     end
   end
 
-  defp update_cache_statistics(cache_dir, compile_info) do
+  defp do_update_cache_statistics(cache_dir, compile_info) do
     stats_file = Path.join(cache_dir, "cache_stats.json")
 
     current_stats =
@@ -1495,7 +1778,7 @@ defmodule Sandbox.IsolatedCompiler do
     }
 
     try do
-      File.write!(stats_file, Jason.encode!(updated_stats))
+      write_json_atomic(stats_file, updated_stats)
     rescue
       error ->
         Logger.warning("Failed to update cache statistics: #{inspect(error)}")
@@ -1633,17 +1916,20 @@ defmodule Sandbox.IsolatedCompiler do
   defp spawn_enhanced_resource_monitor(memory_limit, cpu_limit, max_processes) do
     parent = self()
 
-    spawn(fn ->
-      # Initialize CPU tracking
-      initial_cpu_info = get_system_cpu_info()
+    :proc_lib.spawn_opt(
+      fn ->
+        # Initialize CPU tracking
+        initial_cpu_info = get_system_cpu_info()
 
-      enhanced_resource_monitor_loop(parent, memory_limit, cpu_limit, max_processes, [], %{
-        cpu_baseline: initial_cpu_info,
-        last_check: System.monotonic_time(:millisecond),
-        violation_count: 0,
-        check_interval: 1000
-      })
-    end)
+        enhanced_resource_monitor_loop(parent, memory_limit, cpu_limit, max_processes, [], %{
+          cpu_baseline: initial_cpu_info,
+          last_check: System.monotonic_time(:millisecond),
+          violation_count: 0,
+          check_interval: 1000
+        })
+      end,
+      []
+    )
   end
 
   defp enhanced_resource_monitor_loop(
@@ -1972,8 +2258,18 @@ defmodule Sandbox.IsolatedCompiler do
       "/bin"
     ]
 
+    extra_paths =
+      ["erl", "elixir", "mix"]
+      |> Enum.map(&System.find_executable/1)
+      |> Enum.reject(&is_nil/1)
+      |> Enum.map(&Path.dirname/1)
+
     # Filter to only existing paths
-    existing_paths = Enum.filter(essential_paths, &File.exists?/1)
+    existing_paths =
+      (essential_paths ++ extra_paths)
+      |> Enum.uniq()
+      |> Enum.filter(&File.exists?/1)
+
     Enum.join(existing_paths, ":")
   end
 
@@ -2105,10 +2401,47 @@ defmodule Sandbox.IsolatedCompiler do
     :ok
   end
 
-  defp cleanup_monitors(compiler_ref, resource_ref, resource_monitor) do
+  defp cleanup_monitors(compiler_ref, compiler_pid, resource_ref, resource_monitor) do
+    ensure_process_down(compiler_ref, compiler_pid, 100)
     Process.demonitor(compiler_ref, [:flush])
+
+    if Process.alive?(resource_monitor) do
+      Process.exit(resource_monitor, :shutdown)
+
+      receive do
+        {:DOWN, ^resource_ref, :process, ^resource_monitor, _reason} ->
+          :ok
+      after
+        100 ->
+          Process.exit(resource_monitor, :kill)
+
+          receive do
+            {:DOWN, ^resource_ref, :process, ^resource_monitor, _reason} -> :ok
+          after
+            100 -> :ok
+          end
+      end
+    end
+
     Process.demonitor(resource_ref, [:flush])
-    Process.exit(resource_monitor, :normal)
+  end
+
+  defp ensure_process_down(ref, pid, timeout_ms) do
+    receive do
+      {:DOWN, ^ref, :process, ^pid, _reason} ->
+        :ok
+    after
+      timeout_ms ->
+        if Process.alive?(pid) do
+          Process.exit(pid, :shutdown)
+
+          receive do
+            {:DOWN, ^ref, :process, ^pid, _reason} -> :ok
+          after
+            timeout_ms -> :ok
+          end
+        end
+    end
   end
 
   # Security scanning functions
@@ -2556,19 +2889,6 @@ defmodule Sandbox.IsolatedCompiler do
     ]
   end
 
-  defp in_test_environment? do
-    # Check if we're running in test environment
-    # Also check if elixir executable is not available (common in test environments)
-    System.get_env("MIX_ENV") == "test" ||
-      check_mix_test_env() ||
-      System.find_executable("elixir") == nil
-  end
-
-  defp check_mix_test_env do
-    # credo:disable-for-next-line Credo.Check.Refactor.Apply
-    Code.ensure_loaded?(Mix) && function_exported?(Mix, :env, 0) && apply(Mix, :env, []) == :test
-  end
-
   defp format_in_process_output(beam_files, warnings) do
     beam_info = Enum.map_join(beam_files, "\n", &"Generated #{&1}")
 
@@ -2584,7 +2904,14 @@ defmodule Sandbox.IsolatedCompiler do
 
     warning_info = Enum.map_join(warnings, "\n", &format_warning_message/1)
 
-    [error_info, warning_info]
+    header =
+      if error_info == "" do
+        ""
+      else
+        "== Compilation error"
+      end
+
+    [header, error_info, warning_info]
     |> Enum.reject(&(&1 == ""))
     |> Enum.join("\n")
   end

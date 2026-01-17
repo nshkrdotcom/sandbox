@@ -11,10 +11,24 @@ defmodule Sandbox.InProcessCompiler do
   """
   def compile_in_process(source_path, output_path, opts \\ []) do
     if File.exists?(source_path) do
-      do_compile_in_process(source_path, output_path, opts)
+      with_global_compile_lock(fn ->
+        do_compile_in_process(source_path, output_path, opts)
+      end)
     else
       Logger.error("Source path not found: #{source_path}")
       {:error, {:source_path_not_found, source_path}}
+    end
+  end
+
+  defp with_global_compile_lock(fun) do
+    lock_key = {:sandbox_in_process_compile, node()}
+
+    case :global.trans(lock_key, fun, [node()], 30_000) do
+      :aborted ->
+        {:error, :compile_lock_timeout}
+
+      result ->
+        result
     end
   end
 
@@ -23,7 +37,7 @@ defmodule Sandbox.InProcessCompiler do
 
     try do
       File.mkdir_p!(output_path)
-      source_files = find_source_files(source_path)
+      source_files = pick_source_files(source_path, opts)
       Logger.debug("In-process compiler found #{length(source_files)} files in #{source_path}")
 
       result = compile_source_files(source_files, source_path, output_path, opts)
@@ -147,6 +161,25 @@ defmodule Sandbox.InProcessCompiler do
     Path.wildcard(Path.join([source_path, "**", "*.ex"]))
   end
 
+  defp pick_source_files(source_path, opts) do
+    case Keyword.get(opts, :source_files, []) do
+      [] -> find_source_files(source_path)
+      files -> normalize_source_files(source_path, files)
+    end
+  end
+
+  defp normalize_source_files(source_path, files) do
+    files
+    |> Enum.map(fn file ->
+      file = to_string(file)
+
+      case Path.type(file) do
+        :absolute -> file
+        _ -> Path.join(source_path, file)
+      end
+    end)
+  end
+
   defp compile_files(source_files, output_path, opts) do
     # Set compiler options
     compiler_opts = [
@@ -159,18 +192,54 @@ defmodule Sandbox.InProcessCompiler do
     absolute_source_files = Enum.map(source_files, &Path.expand/1)
     absolute_output_path = Path.expand(output_path)
 
-    # Use Kernel.ParallelCompiler for actual compilation
-    case Kernel.ParallelCompiler.compile_to_path(
-           absolute_source_files,
-           absolute_output_path,
-           compiler_opts
-         ) do
+    parallel? = Keyword.get(opts, :parallel, false) and length(absolute_source_files) > 1
+
+    result =
+      if parallel? do
+        Kernel.ParallelCompiler.compile_to_path(
+          absolute_source_files,
+          absolute_output_path,
+          compiler_opts
+        )
+      else
+        compile_files_serial(absolute_source_files, absolute_output_path)
+      end
+
+    case result do
       {:ok, modules, warnings} ->
         {:ok, modules, warnings}
 
       {:error, errors, warnings} ->
         {:error, errors, warnings}
+
+      other ->
+        {:error, [%{file: "unknown", line: nil, message: inspect(other)}], []}
     end
+  end
+
+  defp compile_files_serial(source_files, output_path) do
+    try do
+      modules =
+        Enum.flat_map(source_files, fn file ->
+          compiled = Code.compile_file(file)
+
+          Enum.map(compiled, fn {module, bytecode} ->
+            maybe_write_beam_file(output_path, module, bytecode)
+            module
+          end)
+        end)
+
+      {:ok, modules, []}
+    rescue
+      error ->
+        {:error, [compile_exception_to_diagnostic(error)], []}
+    end
+  end
+
+  defp compile_exception_to_diagnostic(error) do
+    file = Map.get(error, :file, "unknown") |> to_string()
+    line = Map.get(error, :line)
+    %{file: file, line: line, message: Exception.message(error), severity: :error}
   end
 
   defp load_beam_file(beam_file) do
