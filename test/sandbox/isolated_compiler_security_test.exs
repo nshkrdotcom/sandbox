@@ -1,5 +1,5 @@
 defmodule Sandbox.IsolatedCompilerSecurityTest do
-  use ExUnit.Case, async: true
+  use Sandbox.TestCase
 
   alias Sandbox.IsolatedCompiler
 
@@ -213,13 +213,13 @@ defmodule Sandbox.IsolatedCompilerSecurityTest do
       assert match?({:error, {:compilation_failed, _, _}}, result) or
                match?({:error, {:compiler_crash, _, _, _}}, result)
 
-      # Give time for cleanup
-      :timer.sleep(100)
-
-      final_process_count = length(Process.list())
-
-      # Should not have leaked processes (allowing some variance for test processes)
-      assert abs(final_process_count - initial_process_count) < 5
+      await(
+        fn ->
+          abs(length(Process.list()) - initial_process_count) < 5
+        end,
+        timeout: 1000,
+        description: "cleanup after failed compilation"
+      )
     end
   end
 
@@ -686,7 +686,7 @@ defmodule Sandbox.IsolatedCompilerSecurityTest do
 
   defp create_temp_sandbox do
     temp_dir = System.tmp_dir!()
-    sandbox_name = "security_test_sandbox_#{:rand.uniform(1_000_000)}"
+    sandbox_name = unique_id("security_test_sandbox")
     sandbox_dir = Path.join(temp_dir, sandbox_name)
 
     File.mkdir_p!(sandbox_dir)

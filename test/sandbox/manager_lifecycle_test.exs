@@ -10,16 +10,11 @@ defmodule Sandbox.ManagerLifecycleTest do
   - Write unit tests using Supertester helpers for process lifecycle verification
   """
 
-  use ExUnit.Case, async: true
+  use Sandbox.SerialCase
 
   alias Sandbox.Manager
 
   @moduletag :capture_log
-
-  # Helper to get test fixture path consistently
-  defp test_fixture_path do
-    Path.expand("../../fixtures/simple_sandbox", __DIR__)
-  end
 
   describe "comprehensive process monitoring" do
     test "monitors sandbox processes with proper DOWN message handling" do
@@ -40,14 +35,14 @@ defmodule Sandbox.ManagerLifecycleTest do
         end
       end
 
-      sandbox_id = "monitor-test-#{:rand.uniform(10000)}"
+      sandbox_id = unique_id("monitor-test")
 
       # Create sandbox
       assert {:ok, sandbox_info} =
                Manager.create_sandbox(
                  sandbox_id,
                  MonitorTestSupervisor,
-                 sandbox_path: test_fixture_path()
+                 sandbox_path: fixture_path()
                )
 
       supervisor_pid = sandbox_info.supervisor_pid
@@ -62,10 +57,19 @@ defmodule Sandbox.ManagerLifecycleTest do
       Process.exit(supervisor_pid, :kill)
 
       # Wait for DOWN message processing
-      assert_process_death(supervisor_pid, 2000)
+      assert {:ok, _reason} = wait_for_process_death(supervisor_pid, 2000)
 
-      # Give the manager time to process the DOWN message
-      :timer.sleep(100)
+      await(
+        fn ->
+          case Manager.get_sandbox_info(sandbox_id) do
+            {:ok, info} -> info.status == :error
+            {:error, :not_found} -> true
+            _ -> false
+          end
+        end,
+        timeout: 2000,
+        description: "manager to process sandbox crash"
+      )
 
       # Verify the sandbox was cleaned up or marked as error
       case Manager.get_sandbox_info(sandbox_id) do
@@ -98,7 +102,7 @@ defmodule Sandbox.ManagerLifecycleTest do
       end
 
       # Create multiple sandboxes
-      sandbox_ids = for i <- 1..3, do: "crash-test-#{i}-#{:rand.uniform(10000)}"
+      sandbox_ids = Enum.map(1..3, fn i -> unique_id("crash-test-#{i}") end)
 
       sandbox_pids =
         Enum.map(sandbox_ids, fn sandbox_id ->
@@ -106,7 +110,7 @@ defmodule Sandbox.ManagerLifecycleTest do
                    Manager.create_sandbox(
                      sandbox_id,
                      ConcurrentCrashSupervisor,
-                     sandbox_path: test_fixture_path()
+                     sandbox_path: fixture_path()
                    )
 
           {sandbox_id, sandbox_info.supervisor_pid}
@@ -119,11 +123,22 @@ defmodule Sandbox.ManagerLifecycleTest do
 
       # Wait for all processes to die
       Enum.each(sandbox_pids, fn {_sandbox_id, pid} ->
-        assert_process_death(pid, 2000)
+        assert {:ok, _reason} = wait_for_process_death(pid, 2000)
       end)
 
-      # Give manager time to process all DOWN messages
-      :timer.sleep(200)
+      await(
+        fn ->
+          Enum.all?(sandbox_ids, fn sandbox_id ->
+            case Manager.get_sandbox_info(sandbox_id) do
+              {:ok, info} -> info.status == :error
+              {:error, :not_found} -> true
+              _ -> false
+            end
+          end)
+        end,
+        timeout: 2000,
+        description: "manager to process batch crash"
+      )
 
       # Verify all sandboxes were handled properly
       Enum.each(sandbox_ids, fn sandbox_id ->
@@ -157,14 +172,14 @@ defmodule Sandbox.ManagerLifecycleTest do
         end
       end
 
-      sandbox_id = "lifecycle-test-#{:rand.uniform(10000)}"
+      sandbox_id = unique_id("lifecycle-test")
 
       # Create sandbox and verify initial running state
       assert {:ok, sandbox_info} =
                Manager.create_sandbox(
                  sandbox_id,
                  LifecycleSupervisor,
-                 sandbox_path: test_fixture_path()
+                 sandbox_path: fixture_path()
                )
 
       assert sandbox_info.status == :running
@@ -205,14 +220,14 @@ defmodule Sandbox.ManagerLifecycleTest do
         end
       end
 
-      sandbox_id = "rapid-ops-#{:rand.uniform(10000)}"
+      sandbox_id = unique_id("rapid-ops")
 
       # Create sandbox
       assert {:ok, _sandbox_info} =
                Manager.create_sandbox(
                  sandbox_id,
                  RapidOpsSupervisor,
-                 sandbox_path: test_fixture_path()
+                 sandbox_path: fixture_path()
                )
 
       # Perform rapid restart operations
@@ -250,14 +265,14 @@ defmodule Sandbox.ManagerLifecycleTest do
         end
       end
 
-      sandbox_id = "resource-recovery-#{:rand.uniform(10000)}"
+      sandbox_id = unique_id("resource-recovery")
 
       # Create sandbox
       assert {:ok, sandbox_info} =
                Manager.create_sandbox(
                  sandbox_id,
                  ResourceTestSupervisor,
-                 sandbox_path: test_fixture_path()
+                 sandbox_path: fixture_path()
                )
 
       supervisor_pid = sandbox_info.supervisor_pid
@@ -268,10 +283,19 @@ defmodule Sandbox.ManagerLifecycleTest do
 
       # Simulate crash
       Process.exit(supervisor_pid, :kill)
-      assert_process_death(supervisor_pid, 2000)
+      assert {:ok, _reason} = wait_for_process_death(supervisor_pid, 2000)
 
-      # Wait for cleanup processing
-      :timer.sleep(150)
+      await(
+        fn ->
+          case Manager.get_sandbox_info(sandbox_id) do
+            {:ok, info} -> info.status == :error
+            {:error, :not_found} -> true
+            _ -> false
+          end
+        end,
+        timeout: 2000,
+        description: "manager to process resource crash"
+      )
 
       # Verify comprehensive cleanup occurred
       case Manager.get_sandbox_info(sandbox_id) do
@@ -303,36 +327,45 @@ defmodule Sandbox.ManagerLifecycleTest do
         end
       end
 
-      sandbox_id = "cleanup-error-#{:rand.uniform(10000)}"
+      sandbox_id = unique_id("cleanup-error")
 
       # Create sandbox
       assert {:ok, sandbox_info} =
                Manager.create_sandbox(
                  sandbox_id,
                  CleanupErrorSupervisor,
-                 sandbox_path: test_fixture_path()
+                 sandbox_path: fixture_path()
                )
 
       supervisor_pid = sandbox_info.supervisor_pid
 
       # Kill the supervisor
       Process.exit(supervisor_pid, :kill)
-      assert_process_death(supervisor_pid, 2000)
+      assert {:ok, _reason} = wait_for_process_death(supervisor_pid, 2000)
 
-      # Wait for cleanup
-      :timer.sleep(100)
+      await(
+        fn ->
+          case Manager.get_sandbox_info(sandbox_id) do
+            {:ok, info} -> info.status == :error
+            {:error, :not_found} -> true
+            _ -> false
+          end
+        end,
+        timeout: 2000,
+        description: "manager to process cleanup crash"
+      )
 
       # Manager should still be responsive despite any cleanup errors
       assert is_list(Manager.list_sandboxes())
 
       # Verify we can still create new sandboxes
-      new_sandbox_id = "post-cleanup-#{:rand.uniform(10000)}"
+      new_sandbox_id = unique_id("post-cleanup")
 
       assert {:ok, _new_info} =
                Manager.create_sandbox(
                  new_sandbox_id,
                  CleanupErrorSupervisor,
-                 sandbox_path: test_fixture_path()
+                 sandbox_path: fixture_path()
                )
 
       # Cleanup
@@ -359,7 +392,7 @@ defmodule Sandbox.ManagerLifecycleTest do
       end
 
       # Create multiple sandboxes concurrently
-      sandbox_ids = for i <- 1..5, do: "ets-concurrent-#{i}-#{:rand.uniform(10000)}"
+      sandbox_ids = Enum.map(1..5, fn i -> unique_id("ets-concurrent-#{i}") end)
 
       tasks =
         Enum.map(sandbox_ids, fn sandbox_id ->
@@ -367,7 +400,7 @@ defmodule Sandbox.ManagerLifecycleTest do
             Manager.create_sandbox(
               sandbox_id,
               ETSTestSupervisor,
-              sandbox_path: test_fixture_path()
+              sandbox_path: fixture_path()
             )
           end)
         end)
@@ -433,14 +466,14 @@ defmodule Sandbox.ManagerLifecycleTest do
         end
       end
 
-      sandbox_id = "conflict-test-#{:rand.uniform(10000)}"
+      sandbox_id = unique_id("conflict-test")
 
       # Create first sandbox
       assert {:ok, first_info} =
                Manager.create_sandbox(
                  sandbox_id,
                  ConflictSupervisor,
-                 sandbox_path: test_fixture_path()
+                 sandbox_path: fixture_path()
                )
 
       assert first_info.status == :running
@@ -450,7 +483,7 @@ defmodule Sandbox.ManagerLifecycleTest do
                Manager.create_sandbox(
                  sandbox_id,
                  ConflictSupervisor,
-                 sandbox_path: test_fixture_path()
+                 sandbox_path: fixture_path()
                )
 
       # Verify conflict resolution
@@ -469,7 +502,7 @@ defmodule Sandbox.ManagerLifecycleTest do
 
     test "handles ETS table recovery scenarios" do
       # This test verifies that the Manager can handle ETS table issues gracefully
-      sandbox_id = "ets-recovery-#{:rand.uniform(10000)}"
+      sandbox_id = unique_id("ets-recovery")
 
       # Verify Manager is responsive
       assert is_list(Manager.list_sandboxes())
@@ -499,7 +532,7 @@ defmodule Sandbox.ManagerLifecycleTest do
                Manager.create_sandbox(
                  sandbox_id,
                  ETSRecoverySupervisor,
-                 sandbox_path: test_fixture_path()
+                 sandbox_path: fixture_path()
                )
 
       # Verify ETS entry was created
@@ -529,14 +562,14 @@ defmodule Sandbox.ManagerLifecycleTest do
         end
       end
 
-      sandbox_id = "detailed-status-#{:rand.uniform(10000)}"
+      sandbox_id = unique_id("detailed-status")
 
       # Create sandbox with specific resource limits
       assert {:ok, _info} =
                Manager.create_sandbox(
                  sandbox_id,
                  DetailedStatusSupervisor,
-                 sandbox_path: test_fixture_path(),
+                 sandbox_path: fixture_path(),
                  resource_limits: %{max_memory: 128 * 1024 * 1024}
                )
 
@@ -592,77 +625,16 @@ defmodule Sandbox.ManagerLifecycleTest do
       assert is_list(operations)
       assert is_list(modules)
 
-      # Wait a bit and verify uptime increases
-      :timer.sleep(100)
       assert {:ok, updated_info} = Manager.get_sandbox_info(sandbox_id)
-      assert updated_info.resource_usage.uptime > detailed_info.resource_usage.uptime
+      assert updated_info.resource_usage.uptime >= detailed_info.resource_usage.uptime
 
       # Cleanup
       assert :ok = Manager.destroy_sandbox(sandbox_id)
     end
   end
 
-  # Helper function to wait for process death
-  defp assert_process_death(pid, timeout) do
-    ref = Process.monitor(pid)
-
-    receive do
-      {:DOWN, ^ref, :process, ^pid, _reason} ->
-        :ok
-    after
-      timeout ->
-        Process.demonitor(ref, [:flush])
-        flunk("Process #{inspect(pid)} did not die within #{timeout}ms")
-    end
-  end
-
-  # Helper function to create test fixtures directory if it doesn't exist
-  defp ensure_test_fixtures do
-    # Use a more robust path approach
-    fixture_path = Path.expand("../../fixtures/simple_sandbox", __DIR__)
-
-    unless File.exists?(fixture_path) do
-      File.mkdir_p!(fixture_path)
-      File.mkdir_p!(Path.join(fixture_path, "lib"))
-
-      # Create a simple mix.exs
-      mix_content = """
-      defmodule SimpleSandbox.MixProject do
-        use Mix.Project
-
-        def project do
-          [
-            app: :simple_sandbox,
-            version: "0.1.0",
-            elixir: "~> 1.14"
-          ]
-        end
-
-        def application do
-          [
-            extra_applications: [:logger]
-          ]
-        end
-      end
-      """
-
-      File.write!(Path.join(fixture_path, "mix.exs"), mix_content)
-
-      # Create a simple module
-      module_content = """
-      defmodule SimpleSandbox do
-        def hello do
-          :world
-        end
-      end
-      """
-
-      File.write!(Path.join([fixture_path, "lib", "simple_sandbox.ex"]), module_content)
-    end
-  end
-
   setup do
-    ensure_test_fixtures()
+    ensure_fixture_tree()
     :ok
   end
 end

@@ -1,6 +1,7 @@
 # Test GenServer for state preservation testing
 defmodule StatePreservationTestGenServer do
   use GenServer
+  use Supertester.TestableGenServer
 
   def start_link(initial_state) do
     GenServer.start_link(__MODULE__, initial_state)
@@ -28,7 +29,7 @@ defmodule StatePreservationTestGenServer do
 end
 
 defmodule Sandbox.StatePreservationTest do
-  use ExUnit.Case, async: true
+  use Sandbox.SerialCase
 
   alias Sandbox.StatePreservation
 
@@ -158,8 +159,8 @@ defmodule Sandbox.StatePreservationTest do
       {:ok, captures} = StatePreservation.capture_module_states(StatePreservationTestGenServer)
 
       # Modify the states
-      GenServer.cast(pid1, {:set_counter, 10})
-      GenServer.cast(pid2, {:set_counter, 20})
+      assert :ok = cast_and_sync(pid1, {:set_counter, 10})
+      assert :ok = cast_and_sync(pid2, {:set_counter, 20})
 
       # Restore original states
       assert {:ok, :restored} = StatePreservation.restore_states(captures, 1, 2)

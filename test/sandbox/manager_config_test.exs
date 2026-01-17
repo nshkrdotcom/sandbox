@@ -1,26 +1,21 @@
 defmodule Sandbox.ManagerConfigTest do
-  use ExUnit.Case, async: true
+  use Sandbox.SerialCase
 
   require Logger
   alias Sandbox.Manager
 
   @moduletag :capture_log
 
-  # Helper to get test fixture path consistently
-  defp test_fixture_path do
-    Path.expand("../../fixtures/simple_sandbox", __DIR__)
-  end
-
   describe "configuration validation" do
     test "validates supervisor module exists" do
-      sandbox_id = "test-invalid-supervisor-#{:rand.uniform(10000)}"
+      sandbox_id = unique_id("test-invalid-supervisor")
 
       # Test with non-existent module
       result =
         Manager.create_sandbox(
           sandbox_id,
           NonExistentSupervisor,
-          sandbox_path: test_fixture_path()
+          sandbox_path: fixture_path()
         )
 
       assert {:error, {:validation_failed, errors}} = result
@@ -47,7 +42,7 @@ defmodule Sandbox.ManagerConfigTest do
         end
       end
 
-      sandbox_id = "test-invalid-path-#{:rand.uniform(10000)}"
+      sandbox_id = unique_id("test-invalid-path")
 
       # Test with non-existent path
       result =
@@ -84,14 +79,14 @@ defmodule Sandbox.ManagerConfigTest do
         end
       end
 
-      sandbox_id = "test-invalid-limits-#{:rand.uniform(10000)}"
+      sandbox_id = unique_id("test-invalid-limits")
 
       # Test with invalid resource limits
       result =
         Manager.create_sandbox(
           sandbox_id,
           ValidSupervisor2,
-          sandbox_path: test_fixture_path(),
+          sandbox_path: fixture_path(),
           resource_limits: "invalid"
         )
 
@@ -122,14 +117,14 @@ defmodule Sandbox.ManagerConfigTest do
         end
       end
 
-      sandbox_id = "test-invalid-security-#{:rand.uniform(10000)}"
+      sandbox_id = unique_id("test-invalid-security")
 
       # Test with invalid security profile
       result =
         Manager.create_sandbox(
           sandbox_id,
           ValidSupervisor3,
-          sandbox_path: test_fixture_path(),
+          sandbox_path: fixture_path(),
           security_profile: :invalid_profile
         )
 
@@ -160,14 +155,14 @@ defmodule Sandbox.ManagerConfigTest do
         end
       end
 
-      sandbox_id = "test-valid-config-#{:rand.uniform(10000)}"
+      sandbox_id = unique_id("test-valid-config")
 
       # Test with valid configuration
       result =
         Manager.create_sandbox(
           sandbox_id,
           ValidSupervisor4,
-          sandbox_path: test_fixture_path()
+          sandbox_path: fixture_path()
         )
 
       # Should succeed or fail for reasons other than validation
@@ -206,14 +201,14 @@ defmodule Sandbox.ManagerConfigTest do
         end
       end
 
-      sandbox_id = "test-valid-limits-#{:rand.uniform(10000)}"
+      sandbox_id = unique_id("test-valid-limits")
 
       # Test with valid resource limits
       result =
         Manager.create_sandbox(
           sandbox_id,
           ValidSupervisor5,
-          sandbox_path: test_fixture_path(),
+          sandbox_path: fixture_path(),
           resource_limits: %{
             # 32MB
             max_memory: 32 * 1024 * 1024,
@@ -260,14 +255,14 @@ defmodule Sandbox.ManagerConfigTest do
       end
 
       for profile <- [:high, :medium, :low] do
-        sandbox_id = "test-security-#{profile}-#{:rand.uniform(10000)}"
+        sandbox_id = unique_id("test-security-#{profile}")
 
         # Test with valid security profile
         result =
           Manager.create_sandbox(
             sandbox_id,
             ValidSupervisor6,
-            sandbox_path: test_fixture_path(),
+            sandbox_path: fixture_path(),
             security_profile: profile
           )
 
@@ -311,7 +306,7 @@ defmodule Sandbox.ManagerConfigTest do
 
       # Test with directory missing mix.exs
       temp_dir = create_temp_directory()
-      sandbox_id = "test-no-mix-#{:rand.uniform(10000)}"
+      sandbox_id = unique_id("test-no-mix")
 
       result = Manager.create_sandbox(sandbox_id, TestSupervisor1, sandbox_path: temp_dir)
 
@@ -332,14 +327,14 @@ defmodule Sandbox.ManagerConfigTest do
         def init(_opts), do: Supervisor.init([], strategy: :one_for_one)
       end
 
-      sandbox_id = "test-resource-bounds-#{:rand.uniform(10000)}"
+      sandbox_id = unique_id("test-resource-bounds")
 
       # Test memory limit too small
       result =
         Manager.create_sandbox(
           sandbox_id,
           TestSupervisor2,
-          sandbox_path: test_fixture_path(),
+          sandbox_path: fixture_path(),
           # Less than 1MB
           resource_limits: %{max_memory: 512}
         )
@@ -359,14 +354,14 @@ defmodule Sandbox.ManagerConfigTest do
         def init(_opts), do: Supervisor.init([], strategy: :one_for_one)
       end
 
-      sandbox_id = "test-resource-types-#{:rand.uniform(10000)}"
+      sandbox_id = unique_id("test-resource-types")
 
       # Test invalid memory type
       result =
         Manager.create_sandbox(
           sandbox_id,
           TestSupervisor3,
-          sandbox_path: test_fixture_path(),
+          sandbox_path: fixture_path(),
           resource_limits: %{max_memory: "invalid"}
         )
 
@@ -385,7 +380,7 @@ defmodule Sandbox.ManagerConfigTest do
         def init(_opts), do: Supervisor.init([], strategy: :one_for_one)
       end
 
-      sandbox_id = "test-custom-security-#{:rand.uniform(10000)}"
+      sandbox_id = unique_id("test-custom-security")
 
       # Test valid custom security profile
       custom_profile = %{
@@ -399,7 +394,7 @@ defmodule Sandbox.ManagerConfigTest do
         Manager.create_sandbox(
           sandbox_id,
           TestSupervisor4,
-          sandbox_path: test_fixture_path(),
+          sandbox_path: fixture_path(),
           security_profile: custom_profile
         )
 
@@ -433,7 +428,7 @@ defmodule Sandbox.ManagerConfigTest do
         def init(_opts), do: Supervisor.init([], strategy: :one_for_one)
       end
 
-      sandbox_id = "test-invalid-custom-security-#{:rand.uniform(10000)}"
+      sandbox_id = unique_id("test-invalid-custom-security")
 
       # Test custom profile missing required keys
       invalid_profile = %{
@@ -445,7 +440,7 @@ defmodule Sandbox.ManagerConfigTest do
         Manager.create_sandbox(
           sandbox_id,
           TestSupervisor5,
-          sandbox_path: test_fixture_path(),
+          sandbox_path: fixture_path(),
           security_profile: invalid_profile
         )
 
@@ -464,7 +459,7 @@ defmodule Sandbox.ManagerConfigTest do
         def init(_opts), do: Supervisor.init([], strategy: :one_for_one)
       end
 
-      sandbox_id = "test-security-consistency-#{:rand.uniform(10000)}"
+      sandbox_id = unique_id("test-security-consistency")
 
       # Test inconsistent security profile (high isolation with dangerous operations)
       inconsistent_profile = %{
@@ -479,7 +474,7 @@ defmodule Sandbox.ManagerConfigTest do
         Manager.create_sandbox(
           sandbox_id,
           TestSupervisor6,
-          sandbox_path: test_fixture_path(),
+          sandbox_path: fixture_path(),
           security_profile: inconsistent_profile
         )
 
@@ -498,10 +493,10 @@ defmodule Sandbox.ManagerConfigTest do
       end
 
       # Test comprehensive valid configuration
-      sandbox_id = "test-comprehensive-#{:rand.uniform(10000)}"
+      sandbox_id = unique_id("test-comprehensive")
 
       comprehensive_config = [
-        sandbox_path: test_fixture_path(),
+        sandbox_path: fixture_path(),
         resource_limits: %{
           # 64MB
           max_memory: 64 * 1024 * 1024,
@@ -554,9 +549,7 @@ defmodule Sandbox.ManagerConfigTest do
 
   # Helper functions for enhanced testing
   defp create_temp_directory do
-    temp_dir = Path.join([System.tmp_dir!(), "sandbox_test_#{:rand.uniform(100_000)}"])
-    File.mkdir_p!(temp_dir)
-    temp_dir
+    create_temp_dir("sandbox_test")
   end
 
   defp assert_error_contains(errors, expected_error_type) do
@@ -574,80 +567,29 @@ defmodule Sandbox.ManagerConfigTest do
   end
 
   defp wait_for_sandbox_ready(sandbox_id, timeout) do
-    start_time = System.monotonic_time(:millisecond)
-    wait_for_sandbox_ready_loop(sandbox_id, start_time, timeout)
-  end
+    await(
+      fn ->
+        case Manager.get_sandbox_info(sandbox_id) do
+          {:ok, info} when info.status in [:running, :compiling, :starting] ->
+            true
 
-  defp wait_for_sandbox_ready_loop(sandbox_id, start_time, timeout) do
-    current_time = System.monotonic_time(:millisecond)
+          {:ok, info} when info.status == :error ->
+            flunk("Sandbox #{sandbox_id} entered error state: #{inspect(info)}")
 
-    if current_time - start_time > timeout do
-      flunk("Sandbox #{sandbox_id} did not become ready within #{timeout}ms")
-    else
-      case Manager.get_sandbox_info(sandbox_id) do
-        {:ok, info} when info.status in [:running, :compiling, :starting] ->
-          :ok
+          {:error, :not_found} ->
+            flunk("Sandbox #{sandbox_id} not found")
 
-        {:ok, info} when info.status == :error ->
-          flunk("Sandbox #{sandbox_id} entered error state: #{inspect(info)}")
-
-        {:error, :not_found} ->
-          flunk("Sandbox #{sandbox_id} not found")
-
-        _ ->
-          # Small sleep for polling - acceptable in test context
-          Process.sleep(50)
-          wait_for_sandbox_ready_loop(sandbox_id, start_time, timeout)
-      end
-    end
-  end
-
-  # Helper function to create test fixtures directory if it doesn't exist
-  defp ensure_test_fixtures do
-    fixture_path = test_fixture_path()
-
-    unless File.exists?(fixture_path) do
-      File.mkdir_p!(fixture_path)
-      File.mkdir_p!(Path.join(fixture_path, "lib"))
-
-      # Create a simple mix.exs
-      mix_content = """
-      defmodule SimpleSandbox.MixProject do
-        use Mix.Project
-
-        def project do
-          [
-            app: :simple_sandbox,
-            version: "0.1.0",
-            elixir: "~> 1.14"
-          ]
+          _ ->
+            false
         end
-
-        def application do
-          [
-            extra_applications: [:logger]
-          ]
-        end
-      end
-      """
-
-      File.write!(Path.join(fixture_path, "mix.exs"), mix_content)
-
-      # Create a simple module
-      module_content = """
-      defmodule SimpleSandbox do
-        def hello do
-          :world
-        end
-      end
-      """
-
-      File.write!(Path.join([fixture_path, "lib", "simple_sandbox.ex"]), module_content)
-    end
+      end,
+      timeout: timeout,
+      description: "sandbox #{sandbox_id} ready"
+    )
   end
 
   setup do
-    ensure_test_fixtures()
+    ensure_fixture_tree()
     :ok
   end
 end

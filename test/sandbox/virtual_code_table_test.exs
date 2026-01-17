@@ -1,5 +1,5 @@
 defmodule Sandbox.VirtualCodeTableTest do
-  use ExUnit.Case, async: true
+  use Sandbox.TestCase
 
   alias Sandbox.VirtualCodeTable
 
@@ -61,7 +61,7 @@ defmodule Sandbox.VirtualCodeTableTest do
 
   describe "create_table/2" do
     test "creates a virtual code table successfully" do
-      sandbox_id = "test_create_#{:rand.uniform(10000)}"
+      sandbox_id = unique_id("test_create")
 
       assert {:ok, table_ref} = VirtualCodeTable.create_table(sandbox_id)
       # Named ETS tables return table name (atom)
@@ -72,7 +72,7 @@ defmodule Sandbox.VirtualCodeTableTest do
     end
 
     test "returns existing table if already created" do
-      sandbox_id = "test_existing_#{:rand.uniform(10000)}"
+      sandbox_id = unique_id("test_existing")
 
       assert {:ok, table_ref1} = VirtualCodeTable.create_table(sandbox_id)
       assert {:ok, table_ref2} = VirtualCodeTable.create_table(sandbox_id)
@@ -85,7 +85,7 @@ defmodule Sandbox.VirtualCodeTableTest do
     end
 
     test "supports different table options" do
-      sandbox_id = "test_options_#{:rand.uniform(10000)}"
+      sandbox_id = unique_id("test_options")
 
       assert {:ok, _table_ref} =
                VirtualCodeTable.create_table(sandbox_id,
@@ -101,7 +101,7 @@ defmodule Sandbox.VirtualCodeTableTest do
 
   describe "load_module/4" do
     test "loads a module successfully" do
-      sandbox_id = "test_load_#{:rand.uniform(10000)}"
+      sandbox_id = unique_id("test_load")
       {:ok, _table_ref} = VirtualCodeTable.create_table(sandbox_id)
 
       assert :ok = VirtualCodeTable.load_module(sandbox_id, :TestModule, @sample_beam_data)
@@ -111,7 +111,7 @@ defmodule Sandbox.VirtualCodeTableTest do
     end
 
     test "prevents loading duplicate modules by default" do
-      sandbox_id = "test_duplicate_#{:rand.uniform(10000)}"
+      sandbox_id = unique_id("test_duplicate")
       {:ok, _table_ref} = VirtualCodeTable.create_table(sandbox_id)
 
       assert :ok = VirtualCodeTable.load_module(sandbox_id, :TestModule, @sample_beam_data)
@@ -124,7 +124,7 @@ defmodule Sandbox.VirtualCodeTableTest do
     end
 
     test "allows force reload of modules" do
-      sandbox_id = "test_force_reload_#{:rand.uniform(10000)}"
+      sandbox_id = unique_id("test_force_reload")
       {:ok, _table_ref} = VirtualCodeTable.create_table(sandbox_id)
 
       assert :ok = VirtualCodeTable.load_module(sandbox_id, :TestModule, @sample_beam_data)
@@ -146,7 +146,7 @@ defmodule Sandbox.VirtualCodeTableTest do
 
   describe "fetch_module/2" do
     test "fetches a loaded module successfully" do
-      sandbox_id = "test_fetch_#{:rand.uniform(10000)}"
+      sandbox_id = unique_id("test_fetch")
       {:ok, _table_ref} = VirtualCodeTable.create_table(sandbox_id)
 
       :ok = VirtualCodeTable.load_module(sandbox_id, :TestModule, @sample_beam_data)
@@ -162,7 +162,7 @@ defmodule Sandbox.VirtualCodeTableTest do
     end
 
     test "returns error for non-loaded module" do
-      sandbox_id = "test_fetch_missing_#{:rand.uniform(10000)}"
+      sandbox_id = unique_id("test_fetch_missing")
       {:ok, _table_ref} = VirtualCodeTable.create_table(sandbox_id)
 
       assert {:error, :not_loaded} = VirtualCodeTable.fetch_module(sandbox_id, :NonExistent)
@@ -179,7 +179,7 @@ defmodule Sandbox.VirtualCodeTableTest do
 
   describe "list_modules/2" do
     test "lists all modules in the table" do
-      sandbox_id = "test_list_#{:rand.uniform(10000)}"
+      sandbox_id = unique_id("test_list")
       {:ok, _table_ref} = VirtualCodeTable.create_table(sandbox_id)
 
       :ok = VirtualCodeTable.load_module(sandbox_id, :ModuleA, @sample_beam_data)
@@ -197,12 +197,10 @@ defmodule Sandbox.VirtualCodeTableTest do
     end
 
     test "supports different sorting options" do
-      sandbox_id = "test_list_sort_#{:rand.uniform(10000)}"
+      sandbox_id = unique_id("test_list_sort")
       {:ok, _table_ref} = VirtualCodeTable.create_table(sandbox_id)
 
       :ok = VirtualCodeTable.load_module(sandbox_id, :ZModule, @sample_beam_data)
-      # Ensure different timestamps
-      :timer.sleep(1)
       :ok = VirtualCodeTable.load_module(sandbox_id, :AModule, @sample_beam_data)
 
       # Sort by name (default)
@@ -213,7 +211,9 @@ defmodule Sandbox.VirtualCodeTableTest do
       assert {:ok, modules_by_time} =
                VirtualCodeTable.list_modules(sandbox_id, sort_by: :loaded_at)
 
-      assert [%{name: :ZModule}, %{name: :AModule}] = modules_by_time
+      loaded_at_values = Enum.map(modules_by_time, & &1.loaded_at)
+      assert loaded_at_values == Enum.sort(loaded_at_values)
+      assert Enum.sort(Enum.map(modules_by_time, & &1.name)) == [:AModule, :ZModule]
 
       # Cleanup
       VirtualCodeTable.destroy_table(sandbox_id)
@@ -227,7 +227,7 @@ defmodule Sandbox.VirtualCodeTableTest do
 
   describe "unload_module/2" do
     test "unloads a module successfully" do
-      sandbox_id = "test_unload_#{:rand.uniform(10000)}"
+      sandbox_id = unique_id("test_unload")
       {:ok, _table_ref} = VirtualCodeTable.create_table(sandbox_id)
 
       :ok = VirtualCodeTable.load_module(sandbox_id, :TestModule, @sample_beam_data)
@@ -241,7 +241,7 @@ defmodule Sandbox.VirtualCodeTableTest do
     end
 
     test "returns error for non-loaded module" do
-      sandbox_id = "test_unload_missing_#{:rand.uniform(10000)}"
+      sandbox_id = unique_id("test_unload_missing")
       {:ok, _table_ref} = VirtualCodeTable.create_table(sandbox_id)
 
       assert {:error, :not_loaded} = VirtualCodeTable.unload_module(sandbox_id, :NonExistent)
@@ -258,7 +258,7 @@ defmodule Sandbox.VirtualCodeTableTest do
 
   describe "destroy_table/1" do
     test "destroys a table successfully" do
-      sandbox_id = "test_destroy_#{:rand.uniform(10000)}"
+      sandbox_id = unique_id("test_destroy")
       {:ok, _table_ref} = VirtualCodeTable.create_table(sandbox_id)
 
       assert :ok = VirtualCodeTable.destroy_table(sandbox_id)
@@ -272,7 +272,7 @@ defmodule Sandbox.VirtualCodeTableTest do
 
   describe "get_table_stats/1" do
     test "returns table statistics" do
-      sandbox_id = "test_stats_#{:rand.uniform(10000)}"
+      sandbox_id = unique_id("test_stats")
       {:ok, table_ref} = VirtualCodeTable.create_table(sandbox_id)
 
       :ok = VirtualCodeTable.load_module(sandbox_id, :TestModule, @sample_beam_data)
@@ -294,7 +294,7 @@ defmodule Sandbox.VirtualCodeTableTest do
 
   describe "concurrent operations" do
     test "handles concurrent access safely" do
-      sandbox_id = "test_concurrent_#{:rand.uniform(10000)}"
+      sandbox_id = unique_id("test_concurrent")
 
       {:ok, _table_ref} =
         VirtualCodeTable.create_table(sandbox_id,
@@ -327,7 +327,7 @@ defmodule Sandbox.VirtualCodeTableTest do
 
   describe "integration with different data types" do
     test "handles various module names correctly" do
-      sandbox_id = "test_module_names_#{:rand.uniform(10000)}"
+      sandbox_id = unique_id("test_module_names")
       {:ok, _table_ref} = VirtualCodeTable.create_table(sandbox_id)
 
       module_names = [

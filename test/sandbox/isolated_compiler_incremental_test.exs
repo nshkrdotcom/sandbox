@@ -1,5 +1,5 @@
 defmodule Sandbox.IsolatedCompilerIncrementalTest do
-  use ExUnit.Case, async: true
+  use Sandbox.TestCase
 
   alias Sandbox.IsolatedCompiler
 
@@ -27,9 +27,6 @@ defmodule Sandbox.IsolatedCompilerIncrementalTest do
 
       assert length(first_result.beam_files) > 0
 
-      # Wait a bit to ensure cache is written
-      :timer.sleep(50)
-
       # Incremental compilation with no changes
       assert {:ok, second_result} =
                IsolatedCompiler.incremental_compile(sandbox_dir, [], cache_enabled: true)
@@ -49,8 +46,6 @@ defmodule Sandbox.IsolatedCompilerIncrementalTest do
       assert {:ok, _first_result} = IsolatedCompiler.compile_sandbox(sandbox_dir)
 
       # Modify only one file
-      # Ensure different timestamp
-      :timer.sleep(10)
       create_sample_module(sandbox_dir, "ModuleA", "def func_a, do: :modified_a")
 
       # Incremental compilation
@@ -75,8 +70,6 @@ defmodule Sandbox.IsolatedCompilerIncrementalTest do
                IsolatedCompiler.compile_sandbox(sandbox_dir, cache_enabled: true)
 
       # Modify base module
-      # Give more time to ensure file timestamp changes
-      :timer.sleep(100)
       create_sample_module(sandbox_dir, "BaseModule", "def base_func, do: :modified_base")
 
       # Verify the file was actually modified
@@ -103,7 +96,6 @@ defmodule Sandbox.IsolatedCompilerIncrementalTest do
       assert {:ok, _first_result} = IsolatedCompiler.compile_sandbox(sandbox_dir)
 
       # Introduce syntax error - capture expected compilation error output
-      :timer.sleep(10)
       create_sample_module(sandbox_dir, "ValidModule", "def invalid_func do # missing end")
 
       # Incremental compilation should fail gracefully
@@ -173,7 +165,6 @@ defmodule Sandbox.IsolatedCompilerIncrementalTest do
         end)
 
       # Modify one file
-      :timer.sleep(10)
       create_sample_module(sandbox_dir, "Module1", "def func_1, do: :modified")
 
       # Measure incremental compilation time
@@ -231,7 +222,6 @@ defmodule Sandbox.IsolatedCompilerIncrementalTest do
       assert {:ok, _} = IsolatedCompiler.compile_sandbox(sandbox_dir)
 
       # Modify file content
-      :timer.sleep(10)
       create_sample_module(sandbox_dir, "HashModule", "def modified, do: :modified")
 
       # Should detect the change
@@ -247,7 +237,6 @@ defmodule Sandbox.IsolatedCompilerIncrementalTest do
       assert {:ok, _} = IsolatedCompiler.compile_sandbox(sandbox_dir)
 
       # Add whitespace (same functional content)
-      :timer.sleep(10)
       whitespace_content = "def whitespace_test,   do:   :test  "
       create_sample_module(sandbox_dir, "WhitespaceModule", whitespace_content)
 
@@ -261,7 +250,7 @@ defmodule Sandbox.IsolatedCompilerIncrementalTest do
 
   defp create_temp_sandbox do
     temp_dir = System.tmp_dir!()
-    sandbox_name = "test_sandbox_#{:rand.uniform(1_000_000)}"
+    sandbox_name = unique_id("test_sandbox")
     sandbox_dir = Path.join(temp_dir, sandbox_name)
 
     File.mkdir_p!(sandbox_dir)
@@ -298,5 +287,17 @@ defmodule Sandbox.IsolatedCompilerIncrementalTest do
     """
 
     File.write!(file_path, module_content)
+    bump_mtime(file_path)
+    file_path
+  end
+
+  defp bump_mtime(file_path) do
+    {:ok, %File.Stat{mtime: current_mtime}} = File.stat(file_path)
+
+    current_seconds = :calendar.datetime_to_gregorian_seconds(current_mtime)
+    now_seconds = :calendar.datetime_to_gregorian_seconds(:calendar.universal_time())
+    target_seconds = max(current_seconds, now_seconds) + 1
+
+    File.touch!(file_path, :calendar.gregorian_seconds_to_datetime(target_seconds))
   end
 end

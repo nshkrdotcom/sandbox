@@ -1,5 +1,5 @@
 defmodule Sandbox.ModuleTransformerTest do
-  use ExUnit.Case, async: true
+  use Sandbox.TestCase
 
   alias Sandbox.ModuleTransformer
 

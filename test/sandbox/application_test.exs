@@ -1,5 +1,5 @@
 defmodule Sandbox.ApplicationTest do
-  use ExUnit.Case, async: true
+  use Sandbox.SerialCase
 
   # Clean ETS table contents before each test to ensure isolation
   # without causing race conditions on table existence

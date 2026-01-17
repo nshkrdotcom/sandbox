@@ -1,5 +1,5 @@
 defmodule Sandbox.ModuleVersionManagerDependencyTest do
-  use ExUnit.Case, async: true
+  use Sandbox.SerialCase
 
   # Import only if needed later
   # import Supertester.OTPHelpers
@@ -200,6 +200,7 @@ end
 # Test GenServer for dependency testing
 defmodule DependencyTestGenServer do
   use GenServer
+  use Supertester.TestableGenServer
 
   def start_link({module, initial_state}) do
     GenServer.start_link(__MODULE__, {module, initial_state})

@@ -1,5 +1,5 @@
 defmodule Sandbox.IsolatedCompilerSecurityUnitTest do
-  use ExUnit.Case, async: true
+  use Sandbox.TestCase
 
   alias Sandbox.IsolatedCompiler
 
@@ -315,7 +315,7 @@ defmodule Sandbox.IsolatedCompilerSecurityUnitTest do
 
   defp create_temp_sandbox do
     temp_dir = System.tmp_dir!()
-    sandbox_name = "security_unit_test_sandbox_#{:rand.uniform(1_000_000)}"
+    sandbox_name = unique_id("security_unit_test_sandbox")
     sandbox_dir = Path.join(temp_dir, sandbox_name)
 
     File.mkdir_p!(sandbox_dir)

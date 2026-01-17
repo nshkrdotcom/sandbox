@@ -1,5 +1,5 @@
 defmodule Sandbox.IsolatedCompilerPerformanceTest do
-  use ExUnit.Case, async: true
+  use Sandbox.TestCase
   import Supertester.Assertions
 
   alias Sandbox.IsolatedCompiler
@@ -33,9 +33,7 @@ defmodule Sandbox.IsolatedCompilerPerformanceTest do
           IsolatedCompiler.compile_sandbox(sandbox_dir, cache_enabled: true)
         end)
 
-      # Modify a single file
-      # Ensure different timestamp
-      :timer.sleep(10)
+      # Modify a single file (helper bumps mtime for change detection)
       modify_single_module(sandbox_dir, "Module1", "def modified_func, do: :modified")
 
       # Measure incremental compilation time
@@ -146,7 +144,6 @@ defmodule Sandbox.IsolatedCompilerPerformanceTest do
           if rem(i, 3) == 0 do
             # Modify file every 3rd iteration
             modify_single_module(sandbox_dir, "Module1", "def func_#{i}, do: #{i}")
-            :timer.sleep(10)
           end
 
           {time, {:ok, _result}} =
@@ -199,9 +196,6 @@ defmodule Sandbox.IsolatedCompilerPerformanceTest do
       tasks =
         for i <- 1..5 do
           Task.async(fn ->
-            # Small random delay to create different timing
-            :timer.sleep(:rand.uniform(50))
-
             {time, result} =
               :timer.tc(fn ->
                 IsolatedCompiler.incremental_compile(sandbox_dir)
@@ -249,9 +243,6 @@ defmodule Sandbox.IsolatedCompilerPerformanceTest do
             "Module#{module_num}",
             "def rapid_func_#{i}, do: #{i}"
           )
-
-          # Small delay to ensure file system sees the change
-          :timer.sleep(5)
 
           case IsolatedCompiler.incremental_compile(sandbox_dir) do
             {:ok, result} -> {:ok, result}
@@ -302,7 +293,6 @@ defmodule Sandbox.IsolatedCompilerPerformanceTest do
             if rem(i, 10) == 0 do
               # Modify file occasionally
               modify_single_module(sandbox_dir, "Module1", "def memory_test_#{i}, do: #{i}")
-              :timer.sleep(5)
             end
 
             {:ok, _} = IsolatedCompiler.incremental_compile(sandbox_dir)
@@ -323,7 +313,6 @@ defmodule Sandbox.IsolatedCompilerPerformanceTest do
 
         for i <- 1..10 do
           modify_single_module(sandbox_dir, "Module1", "def leak_test_#{i}, do: #{i}")
-          :timer.sleep(5)
           {:ok, _} = IsolatedCompiler.incremental_compile(sandbox_dir)
         end
 
@@ -337,7 +326,7 @@ defmodule Sandbox.IsolatedCompilerPerformanceTest do
 
   defp create_temp_sandbox do
     temp_dir = System.tmp_dir!()
-    sandbox_name = "perf_test_sandbox_#{:rand.uniform(1_000_000)}"
+    sandbox_name = unique_id("perf_test_sandbox")
     sandbox_dir = Path.join(temp_dir, sandbox_name)
 
     File.mkdir_p!(sandbox_dir)
@@ -467,6 +456,9 @@ defmodule Sandbox.IsolatedCompilerPerformanceTest do
     else
       create_sample_module(sandbox_dir, module_name, additional_content)
     end
+
+    bump_mtime(file_path)
+    file_path
   end
 
   defp modify_function_bodies(sandbox_dir) do
@@ -481,6 +473,7 @@ defmodule Sandbox.IsolatedCompilerPerformanceTest do
         # Change function implementations but keep signatures
         modified_content = String.replace(content, ~r/x \+ (\d+)/, "x * \\1 + 1")
         File.write!(file_path, modified_content)
+        bump_mtime(file_path)
       end
     end
   end
@@ -502,5 +495,15 @@ defmodule Sandbox.IsolatedCompilerPerformanceTest do
     """
 
     File.write!(file_path, module_content)
+  end
+
+  defp bump_mtime(file_path) do
+    {:ok, %File.Stat{mtime: current_mtime}} = File.stat(file_path)
+
+    current_seconds = :calendar.datetime_to_gregorian_seconds(current_mtime)
+    now_seconds = :calendar.datetime_to_gregorian_seconds(:calendar.universal_time())
+    target_seconds = max(current_seconds, now_seconds) + 1
+
+    File.touch!(file_path, :calendar.gregorian_seconds_to_datetime(target_seconds))
   end
 end

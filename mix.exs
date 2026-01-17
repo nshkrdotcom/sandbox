@@ -35,7 +35,7 @@ defmodule Sandbox.MixProject do
       {:file_system, "~> 1.0"},
 
       # Testing infrastructure
-      {:supertester, github: "nshkrdotcom/supertester"},
+      {:supertester, "~> 0.5.1", only: :test},
       {:cluster_test, github: "nshkrdotcom/cluster_test", only: [:dev, :test]},
 
       # Documentation
@@ -45,7 +45,7 @@ defmodule Sandbox.MixProject do
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
 
       # Testing
-      {:stream_data, "~> 1.0", only: [:dev, :test]},
+      {:stream_data, "~> 1.0"},
 
       # Telemetry and monitoring
       {:telemetry, "~> 1.2"},

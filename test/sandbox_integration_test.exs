@@ -1,5 +1,5 @@
 defmodule SandboxIntegrationTest do
-  use ExUnit.Case, async: true
+  use Sandbox.SerialCase
 
   describe "basic sandbox structure" do
     test "application starts with all components" do
@@ -14,7 +14,6 @@ defmodule SandboxIntegrationTest do
 
     test "ETS tables can be initialized and have correct properties" do
       # Ensure tables are initialized
-      Sandbox.Application.cleanup_ets_tables()
       :ok = Sandbox.Application.init_ets_tables()
 
       # Verify all required ETS tables exist
