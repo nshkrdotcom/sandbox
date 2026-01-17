@@ -163,6 +163,21 @@ defmodule Sandbox.Manager do
     GenServer.call(server, {:get_sandbox_pid, sandbox_id})
   end
 
+  def get_run_context(sandbox_id, opts \\ []) do
+    server = Keyword.get(opts, :server, __MODULE__)
+    GenServer.call(server, {:get_run_context, sandbox_id})
+  end
+
+  def get_hot_reload_context(sandbox_id, opts \\ []) do
+    server = Keyword.get(opts, :server, __MODULE__)
+    GenServer.call(server, {:get_hot_reload_context, sandbox_id})
+  end
+
+  def resource_usage(sandbox_id, opts \\ []) do
+    server = Keyword.get(opts, :server, __MODULE__)
+    GenServer.call(server, {:resource_usage, sandbox_id})
+  end
+
   @doc """
   Synchronizes state (useful for testing).
   """
@@ -347,6 +362,64 @@ defmodule Sandbox.Manager do
         {:reply, {:ok, sandbox_info.app_pid}, state}
 
       [] ->
+        {:reply, {:error, :not_found}, state}
+    end
+  end
+
+  @impl true
+  def handle_call({:get_run_context, sandbox_id}, _from, state) do
+    case Map.get(state.sandboxes, sandbox_id) do
+      {sandbox_state, monitor_ref} ->
+        case ensure_run_supervisor(sandbox_state) do
+          {:ok, updated_sandbox_state, run_supervisor_pid} ->
+            updated_state = %{
+              state
+              | sandboxes:
+                  Map.put(state.sandboxes, sandbox_id, {updated_sandbox_state, monitor_ref})
+            }
+
+            context = %{
+              sandbox_id: sandbox_id,
+              run_supervisor_pid: run_supervisor_pid,
+              resource_limits: Map.get(updated_sandbox_state.config, :resource_limits, %{})
+            }
+
+            {:reply, {:ok, context}, updated_state}
+
+          {:error, reason} ->
+            {:reply, {:error, reason}, state}
+        end
+
+      nil ->
+        {:reply, {:error, :not_found}, state}
+    end
+  end
+
+  @impl true
+  def handle_call({:get_hot_reload_context, sandbox_id}, _from, state) do
+    case Map.get(state.sandboxes, sandbox_id) do
+      {sandbox_state, _monitor_ref} ->
+        context = %{
+          sandbox_id: sandbox_state.id,
+          module_namespace_prefix: sandbox_state.module_namespace_prefix,
+          services: state.services,
+          table_prefixes: state.table_prefixes
+        }
+
+        {:reply, {:ok, context}, state}
+
+      nil ->
+        {:reply, {:error, :not_found}, state}
+    end
+  end
+
+  @impl true
+  def handle_call({:resource_usage, sandbox_id}, _from, state) do
+    case Map.get(state.sandboxes, sandbox_id) do
+      {sandbox_state, _monitor_ref} ->
+        {:reply, {:ok, sandbox_resource_usage(sandbox_state)}, state}
+
+      nil ->
         {:reply, {:error, :not_found}, state}
     end
   end
@@ -1221,11 +1294,14 @@ defmodule Sandbox.Manager do
     # Update sandbox state with process isolation information
     isolation_context = extract_isolation_context(isolation_result)
 
+    namespace_prefix = namespace_prefix_from_opts(full_opts)
+
     updated_state =
       sandbox_state
       |> SandboxState.update_processes(app_pid, supervisor_pid, monitor_ref)
       |> SandboxState.update_status(:running)
       |> Map.put(:compilation_artifacts, artifacts)
+      |> Map.put(:module_namespace_prefix, namespace_prefix)
       |> Map.put(:isolation_mode, :process)
       |> Map.put(:isolation_context, isolation_context)
 
@@ -1320,11 +1396,14 @@ defmodule Sandbox.Manager do
           end
 
         # Update sandbox state with process information and running status
+        namespace_prefix = namespace_prefix_from_opts(full_opts)
+
         updated_state =
           sandbox_state
           |> SandboxState.update_processes(app_pid, supervisor_pid, monitor_ref)
           |> SandboxState.update_status(:running)
           |> Map.put(:compilation_artifacts, artifacts)
+          |> Map.put(:module_namespace_prefix, namespace_prefix)
           |> Map.put(:isolation_mode, :module)
 
         {:ok, updated_state, monitor_ref}
@@ -1386,11 +1465,14 @@ defmodule Sandbox.Manager do
           end
 
         # Update sandbox state with hybrid isolation information
+        namespace_prefix = namespace_prefix_from_opts(full_opts)
+
         updated_state =
           sandbox_state
           |> SandboxState.update_processes(app_pid, supervisor_pid, monitor_ref)
           |> SandboxState.update_status(:running)
           |> Map.put(:compilation_artifacts, artifacts)
+          |> Map.put(:module_namespace_prefix, namespace_prefix)
           |> Map.put(:isolation_mode, :hybrid)
           |> Map.put(
             :isolation_context,
@@ -1495,11 +1577,14 @@ defmodule Sandbox.Manager do
     artifacts = build_compilation_artifacts(sandbox_path, compile_info)
 
     # Update sandbox state
+    namespace_prefix = namespace_prefix_from_opts(full_opts)
+
     final_state =
       updated_state
       |> SandboxState.update_processes(app_pid, supervisor_pid, monitor_ref)
       |> SandboxState.update_status(:running)
       |> Map.put(:compilation_artifacts, artifacts)
+      |> Map.put(:module_namespace_prefix, namespace_prefix)
       |> Map.put(:isolation_mode, :ets)
       |> Map.put(:virtual_code_table, table_ref)
 
@@ -2135,37 +2220,7 @@ defmodule Sandbox.Manager do
   defp get_detailed_sandbox_info(sandbox_state) do
     %SandboxState{} = sandbox_state
 
-    # Get current resource usage if process is alive
-    current_resource_usage =
-      case sandbox_state.supervisor_pid do
-        pid when is_pid(pid) and pid != nil ->
-          if Process.alive?(pid) do
-            get_real_time_resource_usage(pid)
-          else
-            sandbox_state.resource_usage
-          end
-
-        _ ->
-          sandbox_state.resource_usage
-      end
-
-    # Calculate uptime
-    uptime =
-      case sandbox_state.status do
-        :running ->
-          case sandbox_state.started_at_monotonic_ms do
-            start_ms when is_integer(start_ms) ->
-              max(System.monotonic_time(:millisecond) - start_ms, 0)
-
-            _ ->
-              DateTime.diff(DateTime.utc_now(), sandbox_state.created_at, :millisecond)
-          end
-
-        _ ->
-          sandbox_state.resource_usage.uptime
-      end
-
-    updated_resource_usage = Map.put(current_resource_usage, :uptime, uptime)
+    updated_resource_usage = sandbox_resource_usage(sandbox_state)
 
     # Convert to info map with updated resource usage
     sandbox_state
@@ -2173,30 +2228,57 @@ defmodule Sandbox.Manager do
     |> SandboxState.to_info()
   end
 
+  defp sandbox_resource_usage(sandbox_state) do
+    current_resource_usage =
+      case sandbox_state.supervisor_pid do
+        pid when is_pid(pid) and Process.alive?(pid) ->
+          get_real_time_resource_usage(pid)
+
+        _ ->
+          sandbox_state.resource_usage
+      end
+
+    uptime = sandbox_uptime_ms(sandbox_state)
+    Map.put(current_resource_usage, :uptime, uptime)
+  end
+
+  defp sandbox_uptime_ms(sandbox_state) do
+    case sandbox_state.status do
+      :running ->
+        case sandbox_state.started_at_monotonic_ms do
+          start_ms when is_integer(start_ms) ->
+            max(System.monotonic_time(:millisecond) - start_ms, 0)
+
+          _ ->
+            DateTime.diff(DateTime.utc_now(), sandbox_state.created_at, :millisecond)
+        end
+
+      _ ->
+        sandbox_state.resource_usage.uptime
+    end
+  end
+
   defp get_real_time_resource_usage(pid) do
-    # Get process info for memory usage
-    process_info = Process.info(pid, [:memory, :message_queue_len, :heap_size, :stack_size])
+    pids = collect_process_tree(pid)
 
-    memory_usage =
-      case process_info do
-        nil -> 0
-        info -> Keyword.get(info, :memory, 0)
-      end
+    {memory_usage, message_queue} =
+      Enum.reduce(pids, {0, 0}, fn process, {memory_acc, queue_acc} ->
+        case Process.info(process, [:memory, :message_queue_len]) do
+          nil ->
+            {memory_acc, queue_acc}
 
-    # Count child processes (simplified)
-    child_count =
-      case Process.info(pid, :links) do
-        nil -> 0
-        {:links, links} -> length(links)
-      end
+          info ->
+            memory_value = Keyword.get(info, :memory, 0)
+            queue_value = Keyword.get(info, :message_queue_len, 0)
+            {memory_acc + memory_value, queue_acc + queue_value}
+        end
+      end)
 
     %{
       current_memory: memory_usage,
-      # +1 for the supervisor itself
-      current_processes: child_count + 1,
-      # Would need more complex calculation for real CPU usage
+      current_processes: length(pids),
+      message_queue: message_queue,
       cpu_usage: 0.0,
-      # Will be calculated by caller
       uptime: 0
     }
   rescue
@@ -2205,9 +2287,133 @@ defmodule Sandbox.Manager do
       %{
         current_memory: 0,
         current_processes: 0,
+        message_queue: 0,
         cpu_usage: 0.0,
         uptime: 0
       }
+  end
+
+  defp collect_process_tree(pid) do
+    {pids, _visited} = do_collect_process_tree(pid, MapSet.new())
+    Enum.reverse(pids)
+  end
+
+  defp do_collect_process_tree(pid, visited) do
+    cond do
+      not is_pid(pid) ->
+        {[], visited}
+
+      not Process.alive?(pid) ->
+        {[], visited}
+
+      MapSet.member?(visited, pid) ->
+        {[], visited}
+
+      true ->
+        updated_visited = MapSet.put(visited, pid)
+        child_pids = supervisor_child_pids(pid)
+
+        {descendants, final_visited} =
+          Enum.reduce(child_pids, {[], updated_visited}, fn child_pid, {acc, acc_visited} ->
+            {child_descendants, new_visited} = do_collect_process_tree(child_pid, acc_visited)
+
+            merged =
+              Enum.reduce(child_descendants, acc, fn descendant, descendant_acc ->
+                [descendant | descendant_acc]
+              end)
+
+            {merged, new_visited}
+          end)
+
+        {[pid | descendants], final_visited}
+    end
+  end
+
+  defp supervisor_child_pids(pid) do
+    case Process.info(pid, :dictionary) do
+      {:dictionary, dict} ->
+        case Keyword.get(dict, :"$initial_call") do
+          {Supervisor, _, _} -> safe_supervisor_children(pid)
+          {:supervisor, _, _} -> safe_supervisor_children(pid)
+          _ -> []
+        end
+
+      _ ->
+        []
+    end
+  end
+
+  defp safe_supervisor_children(pid) do
+    pid
+    |> Supervisor.which_children()
+    |> Enum.map(fn {_id, child_pid, _type, _modules} -> child_pid end)
+    |> Enum.filter(&is_pid/1)
+  rescue
+    ArgumentError -> []
+  end
+
+  defp ensure_run_supervisor(%SandboxState{run_supervisor_pid: pid} = sandbox_state)
+       when is_pid(pid) do
+    if Process.alive?(pid) do
+      {:ok, sandbox_state, pid}
+    else
+      start_run_supervisor(sandbox_state)
+    end
+  end
+
+  defp ensure_run_supervisor(%SandboxState{} = sandbox_state) do
+    start_run_supervisor(sandbox_state)
+  end
+
+  defp start_run_supervisor(
+         %SandboxState{id: sandbox_id, supervisor_pid: supervisor_pid} = sandbox_state
+       ) do
+    cond do
+      not is_pid(supervisor_pid) ->
+        {:error, :supervisor_not_running}
+
+      not Process.alive?(supervisor_pid) ->
+        {:error, :supervisor_not_running}
+
+      true ->
+        spec =
+          Supervisor.child_spec({Task.Supervisor, []}, id: {:sandbox_run_supervisor, sandbox_id})
+
+        case Supervisor.start_child(supervisor_pid, spec) do
+          {:ok, pid} ->
+            {:ok, %{sandbox_state | run_supervisor_pid: pid}, pid}
+
+          {:error, {:already_started, pid}} ->
+            {:ok, %{sandbox_state | run_supervisor_pid: pid}, pid}
+
+          {:error, :already_present} ->
+            lookup_existing_run_supervisor(supervisor_pid, sandbox_id, sandbox_state)
+
+          {:error, reason} ->
+            {:error, {:run_supervisor_failed, reason}}
+        end
+    end
+  end
+
+  defp lookup_existing_run_supervisor(supervisor_pid, sandbox_id, sandbox_state) do
+    case Supervisor.which_children(supervisor_pid) do
+      children when is_list(children) ->
+        case Enum.find(children, fn {id, _pid, _type, _modules} ->
+               id == {:sandbox_run_supervisor, sandbox_id}
+             end) do
+          {_, pid, _, _} when is_pid(pid) ->
+            {:ok, %{sandbox_state | run_supervisor_pid: pid}, pid}
+
+          _ ->
+            {:error, :run_supervisor_not_found}
+        end
+
+      _ ->
+        {:error, :run_supervisor_not_found}
+    end
+  rescue
+    ArgumentError ->
+      {:error, :run_supervisor_not_found}
   end
 
   defp parse_module_or_app(module_or_app, opts) do
@@ -2460,6 +2666,9 @@ defmodule Sandbox.Manager do
   end
 
   defp apply_module_transformation(sandbox_id, sandbox_path, table_prefixes) do
+    sanitized_id = ModuleTransformer.sanitize_sandbox_id(sandbox_id)
+    namespace_prefix = ModuleTransformer.create_unique_namespace(sanitized_id)
+
     # Create module registry for this sandbox
     ModuleTransformer.create_module_registry(sandbox_id,
       table_prefix: table_prefixes.module_registry
@@ -2473,7 +2682,8 @@ defmodule Sandbox.Manager do
         sandbox_id: sandbox_id,
         module_mappings: %{},
         transformed_files: [],
-        total_files: length(ex_files)
+        total_files: length(ex_files),
+        namespace_prefix: namespace_prefix
       }
 
       Logger.debug("Found #{length(ex_files)} source files for transformation",
@@ -2484,7 +2694,7 @@ defmodule Sandbox.Manager do
       # Transform each file
       result =
         Enum.reduce_while(ex_files, {:ok, transformation_info}, fn file_path, {:ok, acc_info} ->
-          case transform_source_file(sandbox_id, file_path, table_prefixes) do
+          case transform_source_file(sandbox_id, file_path, table_prefixes, namespace_prefix) do
             {:ok, file_mappings} ->
               updated_info = %{
                 acc_info
@@ -2526,11 +2736,17 @@ defmodule Sandbox.Manager do
     end
   end
 
-  defp transform_source_file(sandbox_id, file_path, table_prefixes) do
+  defp transform_source_file(sandbox_id, file_path, table_prefixes, namespace_prefix) do
     # Read the source file
     case File.read(file_path) do
       {:ok, source_code} ->
-        transform_and_write_source(sandbox_id, file_path, source_code, table_prefixes)
+        transform_and_write_source(
+          sandbox_id,
+          file_path,
+          source_code,
+          table_prefixes,
+          namespace_prefix
+        )
 
       {:error, read_error} ->
         {:error, {:read_failed, read_error}}
@@ -2540,8 +2756,16 @@ defmodule Sandbox.Manager do
       {:error, {:file_exception, error}}
   end
 
-  defp transform_and_write_source(sandbox_id, file_path, source_code, table_prefixes) do
-    case ModuleTransformer.transform_source(source_code, sandbox_id) do
+  defp transform_and_write_source(
+         sandbox_id,
+         file_path,
+         source_code,
+         table_prefixes,
+         namespace_prefix
+       ) do
+    case ModuleTransformer.transform_source(source_code, sandbox_id,
+           namespace_prefix: namespace_prefix
+         ) do
       {:ok, transformed_code, module_mappings} ->
         write_transformed_source(
           sandbox_id,
@@ -2597,30 +2821,24 @@ defmodule Sandbox.Manager do
       throw({:beam_info_failed, "Could not extract module name from BEAM file: #{beam_file}"})
     end
 
-    # Load the module into the sandbox-specific VirtualCodeTable (ETS)
-    # This avoids polluting the global code path.
-    case VirtualCodeTable.load_module(sandbox_id, module, beam_data,
-           table_prefix: table_prefixes.virtual_code
-         ) do
-      :ok ->
-        # Also register with the version manager for hot-reload capabilities
-        case ModuleVersionManager.register_module_version(sandbox_id, module, beam_data,
-               server: services.module_version_manager
-             ) do
-          {:ok, version} ->
-            Logger.debug("Loaded module #{module} version #{version} for sandbox #{sandbox_id}")
-            :ok
-
-          {:error, reason} ->
-            {:error, {:version_registration_failed, module, reason}}
-        end
-
-      # This can happen on restart/reload, which is acceptable.
+    with :ok <- load_module_binary(module, beam_data, beam_file),
+         :ok <-
+           load_virtual_module(
+             sandbox_id,
+             module,
+             beam_data,
+             table_prefixes.virtual_code
+           ),
+         {:ok, version} <-
+           register_module_version(sandbox_id, module, beam_data, services.module_version_manager) do
+      Logger.debug("Loaded module #{module} version #{version} for sandbox #{sandbox_id}")
+      :ok
+    else
       {:error, {:module_already_loaded, ^module}} ->
         :ok
 
       {:error, reason} ->
-        {:error, {:virtual_load_failed, module, reason}}
+        {:error, reason}
     end
   rescue
     error ->
@@ -2628,6 +2846,33 @@ defmodule Sandbox.Manager do
   catch
     thrown_error ->
       {:error, thrown_error}
+  end
+
+  defp load_module_binary(module, beam_data, beam_file) do
+    case :code.load_binary(module, to_charlist(beam_file), beam_data) do
+      {:module, ^module} -> :ok
+      {:error, reason} -> {:error, {:load_failed, module, reason}}
+    end
+  rescue
+    error ->
+      {:error, {:load_failed, module, error}}
+  end
+
+  defp load_virtual_module(sandbox_id, module, beam_data, table_prefix) do
+    case VirtualCodeTable.load_module(sandbox_id, module, beam_data, table_prefix: table_prefix) do
+      :ok -> :ok
+      {:error, {:module_already_loaded, ^module}} -> {:error, {:module_already_loaded, module}}
+      {:error, reason} -> {:error, {:virtual_load_failed, module, reason}}
+    end
+  end
+
+  defp register_module_version(sandbox_id, module, beam_data, server) do
+    case ModuleVersionManager.register_module_version(sandbox_id, module, beam_data,
+           server: server
+         ) do
+      {:ok, version} -> {:ok, version}
+      {:error, reason} -> {:error, {:version_registration_failed, module, reason}}
+    end
   end
 
   defp load_sandbox_application(app_name, _sandbox_id, _app_file) do
@@ -2652,6 +2897,13 @@ defmodule Sandbox.Manager do
       {:error, :beam_lib, _reason} ->
         nil
     end
+  end
+
+  defp namespace_prefix_from_opts(full_opts) do
+    full_opts
+    |> Keyword.get(:compile_info, %{})
+    |> Map.get(:module_transformation, %{})
+    |> Map.get(:namespace_prefix)
   end
 
   defp ensure_table(table_name, opts) do

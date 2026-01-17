@@ -23,7 +23,9 @@ defmodule Sandbox.Models.SandboxState do
           security_profile: security_profile(),
           file_watcher_pid: pid() | nil,
           auto_reload_enabled: boolean(),
-          compilation_artifacts: [String.t()]
+          compilation_artifacts: [String.t()],
+          module_namespace_prefix: String.t() | nil,
+          run_supervisor_pid: pid() | nil
         }
 
   @type sandbox_status ::
@@ -55,6 +57,7 @@ defmodule Sandbox.Models.SandboxState do
   @type resource_usage :: %{
           current_memory: non_neg_integer(),
           current_processes: non_neg_integer(),
+          message_queue: non_neg_integer(),
           cpu_usage: float(),
           uptime: non_neg_integer()
         }
@@ -83,7 +86,9 @@ defmodule Sandbox.Models.SandboxState do
     :security_profile,
     :file_watcher_pid,
     :auto_reload_enabled,
-    :compilation_artifacts
+    :compilation_artifacts,
+    :module_namespace_prefix,
+    :run_supervisor_pid
   ]
 
   @doc """
@@ -125,7 +130,9 @@ defmodule Sandbox.Models.SandboxState do
       security_profile: Map.get(config, :security_profile, default_security_profile()),
       file_watcher_pid: nil,
       auto_reload_enabled: Map.get(config, :auto_reload, false),
-      compilation_artifacts: []
+      compilation_artifacts: [],
+      module_namespace_prefix: nil,
+      run_supervisor_pid: nil
     }
   end
 
@@ -196,6 +203,7 @@ defmodule Sandbox.Models.SandboxState do
     %{
       current_memory: 0,
       current_processes: 0,
+      message_queue: 0,
       cpu_usage: 0.0,
       uptime: 0
     }
