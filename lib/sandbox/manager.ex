@@ -2231,8 +2231,12 @@ defmodule Sandbox.Manager do
   defp sandbox_resource_usage(sandbox_state) do
     current_resource_usage =
       case sandbox_state.supervisor_pid do
-        pid when is_pid(pid) and Process.alive?(pid) ->
-          get_real_time_resource_usage(pid)
+        pid when is_pid(pid) ->
+          if Process.alive?(pid) do
+            get_real_time_resource_usage(pid)
+          else
+            sandbox_state.resource_usage
+          end
 
         _ ->
           sandbox_state.resource_usage
