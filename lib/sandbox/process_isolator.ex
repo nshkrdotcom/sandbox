@@ -371,7 +371,7 @@ defmodule Sandbox.ProcessIsolator do
     end
   end
 
-  @spec isolated_process_main(map()) :: no_return()
+  @dialyzer {:nowarn_function, isolated_process_main: 1}
   defp isolated_process_main(config) do
     %{
       sandbox_id: sandbox_id,

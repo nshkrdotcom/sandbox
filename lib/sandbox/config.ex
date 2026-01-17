@@ -33,8 +33,8 @@ defmodule Sandbox.Config do
   }
 
   def table_names(opts \\ []) do
-    env = Application.get_env(:sandbox, :table_names, %{})
-    override = Keyword.get(opts, :table_names, %{})
+    env = normalize_override(Application.get_env(:sandbox, :table_names, %{}))
+    override = normalize_override(Keyword.get(opts, :table_names, %{}))
 
     @default_table_names
     |> Map.merge(env)
@@ -46,8 +46,8 @@ defmodule Sandbox.Config do
   end
 
   def service_names(opts \\ []) do
-    env = Application.get_env(:sandbox, :services, %{})
-    override = Keyword.get(opts, :services, %{})
+    env = normalize_override(Application.get_env(:sandbox, :services, %{}))
+    override = normalize_override(Keyword.get(opts, :services, %{}))
 
     @default_service_names
     |> Map.merge(env)
@@ -59,8 +59,8 @@ defmodule Sandbox.Config do
   end
 
   def table_prefixes(opts \\ []) do
-    env = Application.get_env(:sandbox, :table_prefixes, %{})
-    override = Keyword.get(opts, :table_prefixes, %{})
+    env = normalize_override(Application.get_env(:sandbox, :table_prefixes, %{}))
+    override = normalize_override(Keyword.get(opts, :table_prefixes, %{}))
 
     @default_table_prefixes
     |> Map.merge(env)
@@ -77,4 +77,24 @@ defmodule Sandbox.Config do
       _ -> Application.get_env(:sandbox, :cleanup_ets_on_stop, false)
     end
   end
+
+  def persist_ets_on_start?(opts \\ []) do
+    case Keyword.fetch(opts, :persist_ets_on_start) do
+      {:ok, value} -> value
+      :error -> Application.get_env(:sandbox, :persist_ets_on_start, false)
+    end
+  end
+
+  defp normalize_override(nil), do: %{}
+  defp normalize_override(map) when is_map(map), do: map
+
+  defp normalize_override(list) when is_list(list) do
+    if Keyword.keyword?(list) do
+      Map.new(list)
+    else
+      %{}
+    end
+  end
+
+  defp normalize_override(_), do: %{}
 end

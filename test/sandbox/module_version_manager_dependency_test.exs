@@ -1,3 +1,32 @@
+defmodule Sandbox.StatePreservationSpy do
+  use GenServer
+
+  def start_link(test_pid, name) do
+    GenServer.start_link(__MODULE__, test_pid, name: name)
+  end
+
+  @impl true
+  def init(test_pid) do
+    {:ok, test_pid}
+  end
+
+  @impl true
+  def handle_call({:capture_module_states, module, _opts}, _from, test_pid) do
+    send(test_pid, {:capture_module_states, module})
+    {:reply, {:ok, []}, test_pid}
+  end
+
+  @impl true
+  def handle_call(
+        {:restore_states, _captured_states, _old_version, _new_version, _opts},
+        _from,
+        test_pid
+      ) do
+    send(test_pid, :restore_states)
+    {:reply, {:ok, :restored}, test_pid}
+  end
+end
+
 defmodule Sandbox.ModuleVersionManagerDependencyTest do
   use Sandbox.TestCase
 
@@ -314,10 +343,10 @@ defmodule Sandbox.ModuleVersionManagerDependencyTest do
 
       assert %{count: 1} = stateful_module.get_state(pid)
 
-      assert {:ok, 1} =
-               ModuleVersionManager.register_module_version(sandbox_id, stateful_module, beam_v1,
-                 server: manager
-               )
+      {:ok, 1} =
+        ModuleVersionManager.register_module_version(sandbox_id, stateful_module, beam_v1,
+          server: manager
+        )
 
       assert {:ok, 1} =
                ModuleVersionManager.register_module_version(
@@ -343,6 +372,110 @@ defmodule Sandbox.ModuleVersionManagerDependencyTest do
 
       assert %{count: 1, migrated: true} = stateful_module.get_state(pid)
     end
+
+    test "hot swap uses state preservation server override", %{manager: manager} do
+      sandbox_id = unique_id("state_preservation_override")
+      stateful_module = Module.concat(["Stateful", unique_id("Override")])
+
+      beam_v1 = define_stateful_module(stateful_module, 1)
+
+      {:ok, pid} =
+        setup_isolated_genserver(stateful_module, "stateful_module", init_args: %{count: 1})
+
+      Process.unlink(pid)
+
+      {:ok, 1} =
+        ModuleVersionManager.register_module_version(sandbox_id, stateful_module, beam_v1,
+          server: manager
+        )
+
+      beam_v2 = define_stateful_module(stateful_module, 2)
+
+      spy_name = unique_atom("state_preservation_spy")
+      {:ok, spy_pid} = Sandbox.StatePreservationSpy.start_link(self(), spy_name)
+      Process.unlink(spy_pid)
+
+      cleanup_on_exit(fn ->
+        if Process.alive?(spy_pid) do
+          GenServer.stop(spy_pid)
+        end
+      end)
+
+      result =
+        ModuleVersionManager.hot_swap_module(sandbox_id, stateful_module, beam_v2,
+          server: manager,
+          state_preservation_server: spy_name
+        )
+
+      capture_msg =
+        receive do
+          {:capture_module_states, ^stateful_module} = msg -> msg
+        after
+          1000 -> :timeout
+        end
+
+      restore_msg =
+        receive do
+          :restore_states = msg -> msg
+        after
+          1000 -> :timeout
+        end
+
+      assert {result, [capture_msg, restore_msg]} ==
+               {{:ok, :hot_swapped}, [{:capture_module_states, stateful_module}, :restore_states]}
+    end
+
+    test "hot swap uses services map state preservation override", %{manager: manager} do
+      sandbox_id = unique_id("state_preservation_services")
+      stateful_module = Module.concat(["Stateful", unique_id("Services")])
+
+      beam_v1 = define_stateful_module(stateful_module, 1)
+
+      {:ok, pid} =
+        setup_isolated_genserver(stateful_module, "stateful_module", init_args: %{count: 1})
+
+      Process.unlink(pid)
+
+      {:ok, 1} =
+        ModuleVersionManager.register_module_version(sandbox_id, stateful_module, beam_v1,
+          server: manager
+        )
+
+      beam_v2 = define_stateful_module(stateful_module, 2)
+
+      spy_name = unique_atom("state_preservation_spy_services")
+      {:ok, spy_pid} = Sandbox.StatePreservationSpy.start_link(self(), spy_name)
+      Process.unlink(spy_pid)
+
+      cleanup_on_exit(fn ->
+        if Process.alive?(spy_pid) do
+          GenServer.stop(spy_pid)
+        end
+      end)
+
+      result =
+        ModuleVersionManager.hot_swap_module(sandbox_id, stateful_module, beam_v2,
+          server: manager,
+          services: [state_preservation: spy_name]
+        )
+
+      capture_msg =
+        receive do
+          {:capture_module_states, ^stateful_module} = msg -> msg
+        after
+          1000 -> :timeout
+        end
+
+      restore_msg =
+        receive do
+          :restore_states = msg -> msg
+        after
+          1000 -> :timeout
+        end
+
+      assert {result, [capture_msg, restore_msg]} ==
+               {{:ok, :hot_swapped}, [{:capture_module_states, stateful_module}, :restore_states]}
+    end
   end
 
   # Helper functions
@@ -360,7 +493,9 @@ defmodule Sandbox.ModuleVersionManagerDependencyTest do
         path
       end)
 
-    {:ok, _modules, _warnings} = Kernel.ParallelCompiler.compile_to_path(files, dir)
+    {:ok, _modules, _warnings} =
+      Kernel.ParallelCompiler.compile_to_path(files, dir, return_diagnostics: true)
+
     Code.prepend_path(dir)
 
     cleanup_on_exit(fn ->

@@ -45,8 +45,6 @@ defmodule Sandbox.ModuleVersionManager do
   @doc """
   Registers a new module version for a sandbox.
   """
-  @spec register_module_version(String.t(), atom(), binary(), keyword()) ::
-          {:ok, non_neg_integer()} | {:error, any()}
   def register_module_version(sandbox_id, module, beam_data, opts \\ []) do
     server = Keyword.get(opts, :server, __MODULE__)
     GenServer.call(server, {:register_module_version, sandbox_id, module, beam_data})
@@ -59,7 +57,6 @@ defmodule Sandbox.ModuleVersionManager do
     * `:state_handler` - Function to handle state migration `(old_state, old_version, new_version) -> new_state`
     * `:suspend_timeout` - Timeout for suspending processes (default: 5000ms)
   """
-  @spec hot_swap_module(String.t(), atom(), binary(), keyword()) :: hot_swap_result()
   def hot_swap_module(sandbox_id, module, new_beam_data, opts \\ []) do
     {server, call_opts} = split_server_opts(opts)
 
@@ -73,8 +70,6 @@ defmodule Sandbox.ModuleVersionManager do
   @doc """
   Rolls back a module to a previous version.
   """
-  @spec rollback_module(String.t(), atom(), non_neg_integer(), keyword()) ::
-          {:ok, :rolled_back} | {:error, any()}
   def rollback_module(sandbox_id, module, target_version, opts \\ []) do
     server = Keyword.get(opts, :server, __MODULE__)
     GenServer.call(server, {:rollback_module, sandbox_id, module, target_version})
@@ -83,8 +78,6 @@ defmodule Sandbox.ModuleVersionManager do
   @doc """
   Gets the current version number for a module.
   """
-  @spec get_current_version(String.t(), atom(), keyword()) ::
-          {:ok, non_neg_integer()} | {:error, :not_found}
   def get_current_version(sandbox_id, module, opts \\ []) do
     table_name = table_name_for_opts(opts)
 
@@ -103,7 +96,6 @@ defmodule Sandbox.ModuleVersionManager do
   @doc """
   Gets module dependency graph for reload ordering.
   """
-  @spec get_module_dependencies([atom()], keyword()) :: %{atom() => [atom()]}
   def get_module_dependencies(modules, opts \\ []) when is_list(modules) do
     {server, call_opts} = split_server_opts(opts)
     GenServer.call(server, {:get_module_dependencies, modules, call_opts})
@@ -112,8 +104,6 @@ defmodule Sandbox.ModuleVersionManager do
   @doc """
   Calculates optimal reload order for modules based on dependencies.
   """
-  @spec calculate_reload_order([atom()], keyword()) ::
-          {:ok, [atom()]} | {:error, :circular_dependency}
   def calculate_reload_order(modules, opts \\ []) when is_list(modules) do
     {server, call_opts} = split_server_opts(opts)
     GenServer.call(server, {:calculate_reload_order, modules, call_opts})
@@ -122,8 +112,6 @@ defmodule Sandbox.ModuleVersionManager do
   @doc """
   Performs cascading reload of modules in dependency order.
   """
-  @spec cascading_reload(String.t(), [atom()], keyword()) ::
-          {:ok, :reloaded} | {:error, any()}
   def cascading_reload(sandbox_id, modules, opts \\ []) do
     {server, call_opts} = split_server_opts(opts)
     GenServer.call(server, {:cascading_reload, sandbox_id, modules, call_opts}, 60_000)
@@ -132,8 +120,6 @@ defmodule Sandbox.ModuleVersionManager do
   @doc """
   Extracts dependencies from BEAM file with detailed analysis.
   """
-  @spec extract_beam_dependencies(binary(), keyword()) ::
-          {:ok, %{imports: [atom()], exports: [atom()], attributes: map()}} | {:error, any()}
   def extract_beam_dependencies(beam_data, opts \\ []) do
     server = Keyword.get(opts, :server, __MODULE__)
     GenServer.call(server, {:extract_beam_dependencies, beam_data})
@@ -142,8 +128,6 @@ defmodule Sandbox.ModuleVersionManager do
   @doc """
   Detects circular dependencies in a module graph.
   """
-  @spec detect_circular_dependencies(%{atom() => [atom()]}, keyword()) ::
-          {:ok, :no_cycles} | {:error, {:circular_dependency, [atom()]}}
   def detect_circular_dependencies(dependency_graph, opts \\ []) do
     server = Keyword.get(opts, :server, __MODULE__)
     GenServer.call(server, {:detect_circular_dependencies, dependency_graph})
@@ -152,8 +136,6 @@ defmodule Sandbox.ModuleVersionManager do
   @doc """
   Performs parallel reload of independent modules.
   """
-  @spec parallel_reload(String.t(), [atom()], keyword()) ::
-          {:ok, :reloaded} | {:error, any()}
   def parallel_reload(sandbox_id, modules, opts \\ []) do
     {server, call_opts} = split_server_opts(opts)
     GenServer.call(server, {:parallel_reload, sandbox_id, modules, call_opts}, 60_000)
@@ -162,7 +144,6 @@ defmodule Sandbox.ModuleVersionManager do
   @doc """
   Lists all versions for a specific module in a sandbox.
   """
-  @spec list_module_versions(String.t(), atom(), keyword()) :: [module_version()]
   def list_module_versions(sandbox_id, module, opts \\ []) do
     table_name = table_name_for_opts(opts)
 
@@ -174,11 +155,6 @@ defmodule Sandbox.ModuleVersionManager do
   @doc """
   Gets version history for a module with statistics.
   """
-  @spec get_version_history(String.t(), atom(), keyword()) :: %{
-          current_version: non_neg_integer() | nil,
-          total_versions: non_neg_integer(),
-          versions: [module_version()]
-        }
   def get_version_history(sandbox_id, module, opts \\ []) do
     versions = list_module_versions(sandbox_id, module, opts)
 
@@ -192,7 +168,6 @@ defmodule Sandbox.ModuleVersionManager do
   @doc """
   Cleans up all module versions for a sandbox.
   """
-  @spec cleanup_sandbox_modules(String.t(), keyword()) :: :ok
   def cleanup_sandbox_modules(sandbox_id, opts \\ []) do
     server = Keyword.get(opts, :server, __MODULE__)
     GenServer.call(server, {:cleanup_sandbox_modules, sandbox_id})
@@ -201,7 +176,6 @@ defmodule Sandbox.ModuleVersionManager do
   @doc """
   Exports module versions for backup or migration.
   """
-  @spec export_sandbox_modules(String.t(), keyword()) :: {:ok, map()} | {:error, any()}
   def export_sandbox_modules(sandbox_id, opts \\ []) do
     server = Keyword.get(opts, :server, __MODULE__)
     GenServer.call(server, {:export_sandbox_modules, sandbox_id})
@@ -210,7 +184,6 @@ defmodule Sandbox.ModuleVersionManager do
   @doc """
   Gets the ETS table name for testing purposes.
   """
-  @spec get_table_name(keyword()) :: atom()
   def get_table_name(opts \\ []) do
     table_name_for_opts(opts)
   end
@@ -1408,7 +1381,6 @@ defmodule Sandbox.ModuleVersionManager do
   end
 
   # Using plain maps instead of MapSet to avoid Dialyzer opaque type issues with OTP 28
-  @spec find_cycles_in_graph(map()) :: [[atom()]]
   defp find_cycles_in_graph(dependency_graph) do
     visited = %{}
     cycles = []
@@ -1430,8 +1402,6 @@ defmodule Sandbox.ModuleVersionManager do
     end
   end
 
-  @spec dfs_cycle_detection(atom(), map(), map(), map(), [atom()]) ::
-          {:cycle, [atom()]} | {:no_cycle, map()}
   defp dfs_cycle_detection(module, dependency_graph, visited, rec_stack, path) do
     if Map.has_key?(rec_stack, module) do
       # Found a cycle
@@ -1724,6 +1694,13 @@ defmodule Sandbox.ModuleVersionManager do
   end
 
   defp merge_state_preservation_opts(opts) do
+    opts
+    |> Keyword.delete(:server)
+    |> maybe_put_migration_function()
+    |> maybe_put_state_preservation_server(opts)
+  end
+
+  defp maybe_put_migration_function(opts) do
     case Keyword.fetch(opts, :migration_function) do
       {:ok, _} ->
         opts
@@ -1735,4 +1712,30 @@ defmodule Sandbox.ModuleVersionManager do
         end
     end
   end
+
+  defp maybe_put_state_preservation_server(opts, original_opts) do
+    case state_preservation_server_from_opts(original_opts) do
+      nil -> opts
+      server -> Keyword.put(opts, :server, server)
+    end
+  end
+
+  defp state_preservation_server_from_opts(opts) do
+    case Keyword.get(opts, :state_preservation_server) do
+      nil -> state_preservation_from_services(Keyword.get(opts, :services))
+      server -> server
+    end
+  end
+
+  defp state_preservation_from_services(nil), do: nil
+
+  defp state_preservation_from_services(services) when is_map(services) do
+    Map.get(services, :state_preservation)
+  end
+
+  defp state_preservation_from_services(services) when is_list(services) do
+    Keyword.get(services, :state_preservation)
+  end
+
+  defp state_preservation_from_services(_), do: nil
 end

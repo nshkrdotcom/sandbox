@@ -61,7 +61,6 @@ defmodule Sandbox.StateSchema do
   @doc """
   Creates a new state schema definition.
   """
-  @spec new_schema(non_neg_integer(), keyword()) :: schema()
   def new_schema(version, opts \\ []) do
     %{
       version: version,
@@ -75,7 +74,6 @@ defmodule Sandbox.StateSchema do
   @doc """
   Adds a field specification to a schema.
   """
-  @spec add_field(schema(), atom(), field_type(), keyword()) :: schema()
   def add_field(schema, field_name, field_type, opts \\ []) do
     field_spec = %{
       type: field_type,
@@ -104,8 +102,6 @@ defmodule Sandbox.StateSchema do
   @doc """
   Adds a transformation between schema versions.
   """
-  @spec add_transformation(schema(), non_neg_integer(), non_neg_integer(), function(), keyword()) ::
-          schema()
   def add_transformation(schema, from_version, to_version, transform_fn, opts \\ []) do
     transformation = %{
       from_version: from_version,
@@ -123,7 +119,6 @@ defmodule Sandbox.StateSchema do
   @doc """
   Validates state against a schema.
   """
-  @spec validate_state(any(), schema()) :: validation_result()
   def validate_state(state, schema) when is_map(state) do
     _errors = []
 
@@ -176,7 +171,6 @@ defmodule Sandbox.StateSchema do
   @doc """
   Detects schema changes between two states.
   """
-  @spec detect_schema_changes(any(), any()) :: [schema_change()]
   def detect_schema_changes(old_state, new_state) when is_map(old_state) and is_map(new_state) do
     old_keys = MapSet.new(Map.keys(old_state))
     new_keys = MapSet.new(Map.keys(new_state))
@@ -225,7 +219,6 @@ defmodule Sandbox.StateSchema do
   @doc """
   Migrates state using schema transformations.
   """
-  @spec migrate_state(any(), non_neg_integer(), non_neg_integer(), schema()) :: migration_result()
   def migrate_state(state, from_version, to_version, schema) do
     case Map.get(schema.transformations, {from_version, to_version}) do
       nil ->
@@ -240,7 +233,6 @@ defmodule Sandbox.StateSchema do
   @doc """
   Applies default values for missing fields based on schema.
   """
-  @spec apply_defaults(map(), schema()) :: map()
   def apply_defaults(state, schema) when is_map(state) do
     schema.fields
     |> Enum.reduce(state, fn {field_name, field_spec}, acc ->

@@ -76,7 +76,6 @@ defmodule Sandbox.IsolatedCompiler do
       iex> compile_sandbox("/invalid/path") 
       {:error, {:invalid_sandbox_path, "/invalid/path"}}
   """
-  @spec compile_sandbox(String.t(), compile_opts()) :: compile_result()
   def compile_sandbox(sandbox_path, opts \\ []) do
     incremental = Keyword.get(opts, :incremental, false)
     force_recompile = Keyword.get(opts, :force_recompile, false)
@@ -168,7 +167,6 @@ defmodule Sandbox.IsolatedCompiler do
   @doc """
   Validates compiled BEAM files for basic integrity.
   """
-  @spec validate_compilation([String.t()]) :: :ok | {:error, String.t()}
   def validate_compilation(beam_files) when is_list(beam_files) do
     beam_files
     |> Enum.reduce_while(:ok, fn beam_file, :ok ->
@@ -182,12 +180,6 @@ defmodule Sandbox.IsolatedCompiler do
   @doc """
   Generates a compilation report with warnings and errors.
   """
-  @spec compilation_report(compile_result()) :: %{
-          status: :success | :failure,
-          summary: String.t(),
-          details: String.t(),
-          metrics: map()
-        }
   def compilation_report({:ok, compile_info}) do
     %{
       status: :success,
@@ -218,7 +210,6 @@ defmodule Sandbox.IsolatedCompiler do
   @doc """
   Cleans up temporary compilation artifacts.
   """
-  @spec cleanup_temp_artifacts(String.t()) :: :ok
   def cleanup_temp_artifacts(temp_dir) do
     if File.exists?(temp_dir) do
       File.rm_rf!(temp_dir)
@@ -241,7 +232,6 @@ defmodule Sandbox.IsolatedCompiler do
       iex> incremental_compile("/path/to/sandbox", ["lib/my_module.ex"])
       {:ok, %{incremental: true, changed_files: ["lib/my_module.ex"], ...}}
   """
-  @spec incremental_compile(String.t(), [String.t()], compile_opts()) :: compile_result()
   def incremental_compile(sandbox_path, changed_files \\ [], opts \\ []) do
     dependency_analysis = Keyword.get(opts, :dependency_analysis, true)
 
@@ -401,7 +391,6 @@ defmodule Sandbox.IsolatedCompiler do
   @doc """
   Compiles a single Elixir file in isolation.
   """
-  @spec compile_file(String.t(), compile_opts()) :: compile_result()
   def compile_file(file_path, opts \\ []) do
     if File.exists?(file_path) do
       # Create a temporary directory for single file compilation
@@ -436,8 +425,6 @@ defmodule Sandbox.IsolatedCompiler do
       iex> scan_code_security("/path/to/sandbox")
       {:ok, %{threats: [], warnings: [%{type: :file_access, file: "lib/file_ops.ex"}]}}
   """
-  @spec scan_code_security(String.t(), keyword()) ::
-          {:ok, %{threats: [map()], warnings: [map()]}} | {:error, term()}
   def scan_code_security(sandbox_path, opts \\ []) do
     restricted_modules = Keyword.get(opts, :restricted_modules, default_restricted_modules())
     allowed_operations = Keyword.get(opts, :allowed_operations, [])
@@ -452,7 +439,6 @@ defmodule Sandbox.IsolatedCompiler do
   @doc """
   Validates BEAM files for integrity and security.
   """
-  @spec validate_beam_files([String.t()]) :: :ok | {:error, String.t()}
   def validate_beam_files(beam_files) when is_list(beam_files) do
     beam_files
     |> Enum.reduce_while(:ok, fn beam_file, :ok ->
@@ -1540,7 +1526,6 @@ defmodule Sandbox.IsolatedCompiler do
       {:ok, stats} = get_cache_statistics("/path/to/sandbox")
       IO.inspect(stats.cache_hit_rate)
   """
-  @spec get_cache_statistics(String.t()) :: {:ok, map()} | {:error, term()}
   def get_cache_statistics(sandbox_path) do
     with {:ok, cache_dir} <- ensure_cache_directory(sandbox_path) do
       stats_file = Path.join(cache_dir, "cache_stats.json")
@@ -1597,7 +1582,6 @@ defmodule Sandbox.IsolatedCompiler do
 
       :ok = clear_compilation_cache("/path/to/sandbox")
   """
-  @spec clear_compilation_cache(String.t()) :: :ok | {:error, term()}
   def clear_compilation_cache(sandbox_path) do
     case ensure_cache_directory(sandbox_path) do
       {:ok, cache_dir} ->

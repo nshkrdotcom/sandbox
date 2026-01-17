@@ -23,8 +23,9 @@ defmodule Sandbox.Application do
     table_names = Config.table_names()
     service_names = Config.service_names()
     table_prefixes = Config.table_prefixes()
+    persist_ets_on_start = Config.persist_ets_on_start?()
 
-    :ok = init_ets_tables(table_names: table_names)
+    :ok = init_ets_tables(table_names: table_names, persist_ets_on_start: persist_ets_on_start)
 
     # Emit telemetry event for application startup
     :telemetry.execute([:sandbox, :application, :start], %{}, %{})
@@ -102,6 +103,7 @@ defmodule Sandbox.Application do
   """
   def init_ets_tables(opts \\ []) do
     table_names = Config.table_names(opts)
+    persist_ets_on_start = Config.persist_ets_on_start?(opts)
 
     tables = [
       {table_names.sandbox_registry,
@@ -138,22 +140,8 @@ defmodule Sandbox.Application do
        ]}
     ]
 
-    Enum.each(tables, fn {name, opts} ->
-      case :ets.whereis(name) do
-        :undefined ->
-          try do
-            :ets.new(name, opts)
-            Logger.debug("Created ETS table: #{name}")
-          catch
-            :error, :badarg ->
-              # This handles the race condition where another process created the table
-              # between the :ets.whereis/1 check and :ets.new/2 call.
-              Logger.debug("ETS table #{name} was created concurrently by another process")
-          end
-
-        _existing_ref ->
-          Logger.debug("ETS table already exists: #{name}")
-      end
+    Enum.each(tables, fn {name, table_opts} ->
+      ensure_table(name, table_opts, persist_ets_on_start)
     end)
 
     Logger.debug("ETS tables initialized successfully")
@@ -229,4 +217,37 @@ defmodule Sandbox.Application do
 
   defp table_names_from_state(%{table_names: table_names}), do: table_names
   defp table_names_from_state(_state), do: Config.table_names()
+
+  defp create_ets_table(name, opts) do
+    :ets.new(name, opts)
+    Logger.debug("Created ETS table: #{name}")
+  rescue
+    ArgumentError ->
+      Logger.debug("ETS table #{name} was created concurrently by another process")
+  end
+
+  defp reset_ets_table(name, opts) do
+    delete_ets_table(name)
+    create_ets_table(name, opts)
+  end
+
+  defp ensure_table(name, table_opts, persist_ets_on_start) do
+    case :ets.whereis(name) do
+      :undefined ->
+        create_ets_table(name, table_opts)
+
+      _existing_ref when persist_ets_on_start ->
+        Logger.debug("ETS table already exists: #{name}")
+
+      _existing_ref ->
+        reset_ets_table(name, table_opts)
+    end
+  end
+
+  defp delete_ets_table(name) do
+    :ets.delete(name)
+  rescue
+    ArgumentError ->
+      :ok
+  end
 end

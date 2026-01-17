@@ -17,11 +17,7 @@ defmodule Sandbox.ApplicationTest do
         table_names.sandbox_resources,
         table_names.sandbox_security
       ]
-      |> Enum.each(fn table ->
-        if :ets.whereis(table) != :undefined do
-          :ets.delete(table)
-        end
-      end)
+      |> Enum.each(&safe_delete_table/1)
     end)
 
     {:ok, %{table_names: table_names}}
@@ -77,6 +73,41 @@ defmodule Sandbox.ApplicationTest do
       assert :ets.whereis(table_names.sandbox_resources) != :undefined
       assert :ets.whereis(table_names.sandbox_security) != :undefined
     end
+
+    test "init_ets_tables clears existing objects by default", %{table_names: table_names} do
+      :ok =
+        Sandbox.Application.init_ets_tables(
+          table_names: table_names,
+          persist_ets_on_start: true
+        )
+
+      :ets.insert(table_names.sandbox_registry, {:stale, true})
+
+      :ok = Sandbox.Application.init_ets_tables(table_names: table_names)
+
+      assert [] = :ets.lookup(table_names.sandbox_registry, :stale)
+    end
+
+    test "init_ets_tables preserves objects when persistence is enabled", %{
+      table_names: table_names
+    } do
+      :ok =
+        Sandbox.Application.init_ets_tables(
+          table_names: table_names,
+          persist_ets_on_start: true
+        )
+
+      :ets.insert(table_names.sandbox_registry, {:persisted, true})
+
+      :ok =
+        Sandbox.Application.init_ets_tables(
+          table_names: table_names,
+          persist_ets_on_start: true
+        )
+
+      assert [{:persisted, true}] =
+               :ets.lookup(table_names.sandbox_registry, :persisted)
+    end
   end
 
   describe "application lifecycle" do
@@ -100,5 +131,12 @@ defmodule Sandbox.ApplicationTest do
 
       assert :ets.whereis(table_names.sandbox_registry) == :undefined
     end
+  end
+
+  defp safe_delete_table(table) do
+    :ets.delete(table)
+  rescue
+    ArgumentError ->
+      :ok
   end
 end

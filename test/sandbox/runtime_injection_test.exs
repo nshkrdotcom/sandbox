@@ -108,6 +108,7 @@ defmodule Sandbox.RuntimeInjectionTest do
     manager_name = unique_atom("mvm")
 
     {:ok, pid} = ModuleVersionManager.start_link(name: manager_name, table_name: table_name)
+    Process.unlink(pid)
 
     on_exit(fn ->
       if Process.alive?(pid) do

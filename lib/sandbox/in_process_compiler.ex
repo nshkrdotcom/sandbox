@@ -151,7 +151,8 @@ defmodule Sandbox.InProcessCompiler do
     # Set compiler options
     compiler_opts = [
       dest: output_path,
-      debug_info: Keyword.get(opts, :debug_info, true)
+      debug_info: Keyword.get(opts, :debug_info, true),
+      return_diagnostics: true
     ]
 
     # Use absolute paths to avoid cwd dependency
@@ -191,24 +192,73 @@ defmodule Sandbox.InProcessCompiler do
   end
 
   defp format_warnings(warnings) do
-    Enum.map(warnings, fn {file, line, message} ->
-      %{
-        file: to_string(file),
-        line: line,
-        message: format_message(message)
-      }
-    end)
+    Enum.map(warnings, &format_diagnostic(&1, :warning, false))
   end
 
   defp format_errors(errors) do
-    Enum.map(errors, fn {file, line, message} ->
-      %{
-        file: to_string(file),
-        line: line,
-        message: format_message(message),
-        severity: :error
-      }
-    end)
+    Enum.map(errors, &format_diagnostic(&1, :error, true))
+  end
+
+  defp format_diagnostic({file, line, message}, severity, include_severity?) do
+    base = %{
+      file: to_string(file),
+      line: line,
+      message: format_message(message)
+    }
+
+    if include_severity? do
+      Map.put(base, :severity, severity)
+    else
+      base
+    end
+  end
+
+  defp format_diagnostic(%{file: _file} = diagnostic, severity, include_severity?) do
+    file = diagnostic_file(diagnostic)
+    line = diagnostic_line(diagnostic)
+    message = Map.get(diagnostic, :message, diagnostic)
+
+    base = %{
+      file: file,
+      line: line,
+      message: format_message(message)
+    }
+
+    if include_severity? do
+      Map.put(base, :severity, Map.get(diagnostic, :severity, severity))
+    else
+      base
+    end
+  end
+
+  defp format_diagnostic(other, severity, include_severity?) do
+    base = %{
+      file: "unknown",
+      line: nil,
+      message: format_message(other)
+    }
+
+    if include_severity? do
+      Map.put(base, :severity, severity)
+    else
+      base
+    end
+  end
+
+  defp diagnostic_file(diagnostic) do
+    case Map.get(diagnostic, :file) do
+      nil -> "unknown"
+      file -> to_string(file)
+    end
+  end
+
+  defp diagnostic_line(diagnostic) do
+    case Map.get(diagnostic, :position) do
+      {line, _column} -> line
+      line when is_integer(line) -> line
+      nil -> Map.get(diagnostic, :line)
+      _ -> nil
+    end
   end
 
   defp format_message(message) when is_binary(message), do: message

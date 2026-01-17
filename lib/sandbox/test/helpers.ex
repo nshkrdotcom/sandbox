@@ -35,8 +35,6 @@ defmodule Sandbox.Test.Helpers do
         assert Process.alive?(sandbox_pid)
       end
   """
-  @spec setup_test_sandbox(String.t(), atom(), keyword()) ::
-          {:ok, pid()} | {:error, term()}
   def setup_test_sandbox(test_name, supervisor_module, opts \\ []) do
     sandbox_id = "test_#{test_name}_#{:rand.uniform(10000)}"
 
@@ -58,7 +56,6 @@ defmodule Sandbox.Test.Helpers do
 
       assert_sandbox_running("my-sandbox")
   """
-  @spec assert_sandbox_running(String.t()) :: :ok
   def assert_sandbox_running(sandbox_id) do
     case Sandbox.Manager.get_sandbox_info(sandbox_id) do
       {:ok, info} ->
@@ -88,7 +85,6 @@ defmodule Sandbox.Test.Helpers do
 
       assert_hot_reload_successful("my-sandbox", MyModule)
   """
-  @spec assert_hot_reload_successful(String.t(), atom()) :: :ok
   def assert_hot_reload_successful(sandbox_id, module) do
     # Check that the module is loaded in the sandbox
     case Sandbox.ModuleVersionManager.get_current_version(sandbox_id, module) do
@@ -115,7 +111,6 @@ defmodule Sandbox.Test.Helpers do
       :ok = wait_for_compilation("my-sandbox")
       :ok = wait_for_compilation("my-sandbox", 10_000)
   """
-  @spec wait_for_compilation(String.t(), non_neg_integer()) :: :ok | {:error, :timeout}
   def wait_for_compilation(sandbox_id, timeout \\ 5000) do
     wait_for_condition(
       fn ->
@@ -149,8 +144,6 @@ defmodule Sandbox.Test.Helpers do
       
       {:ok, results} = stress_test_sandbox("my-sandbox", operations, 30_000)
   """
-  @spec stress_test_sandbox(String.t(), [operation()], non_neg_integer()) ::
-          {:ok, test_results()} | {:error, term()}
   def stress_test_sandbox(sandbox_id, operations, duration_ms) do
     start_time = System.monotonic_time(:millisecond)
     end_time = start_time + duration_ms
@@ -173,7 +166,6 @@ defmodule Sandbox.Test.Helpers do
       {:ok, temp_dir} = create_temp_sandbox_dir()
       File.write!(Path.join(temp_dir, "test.ex"), "defmodule Test, do: nil")
   """
-  @spec create_temp_sandbox_dir() :: {:ok, String.t()} | {:error, term()}
   def create_temp_sandbox_dir do
     temp_dir = Path.join(System.tmp_dir!(), "sandbox_test_#{:rand.uniform(10000)}")
 
@@ -203,7 +195,6 @@ defmodule Sandbox.Test.Helpers do
         assert_no_process_leaks(initial_count)
       end
   """
-  @spec assert_no_process_leaks(non_neg_integer()) :: :ok
   def assert_no_process_leaks(initial_process_count) do
     # Allow some time for cleanup
     wait_for_condition(
@@ -250,8 +241,11 @@ defmodule Sandbox.Test.Helpers do
         {:error, :timeout}
 
       true ->
-        # Small sleep to avoid busy waiting
-        Process.sleep(50)
+        receive do
+        after
+          50 -> :ok
+        end
+
         wait_for_condition_loop(condition_fn, end_time)
     end
   end

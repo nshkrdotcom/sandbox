@@ -114,7 +114,7 @@ defmodule Sandbox.TestHelpers do
   end
 
   def fixture_path do
-    Path.expand("../fixtures/simple_sandbox", __DIR__)
+    Path.expand("../../fixtures/simple_sandbox", __DIR__)
   end
 
   def ensure_fixture_tree do
