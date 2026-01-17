@@ -29,38 +29,29 @@ defmodule StatePreservationTestGenServer do
 end
 
 defmodule Sandbox.StatePreservationTest do
-  use Sandbox.SerialCase
+  use Sandbox.TestCase
 
   alias Sandbox.StatePreservation
 
   setup do
-    # StatePreservation is already started by the application
-    # Just ensure it's available
-    pid = Process.whereis(StatePreservation)
+    state_name = unique_atom("state_preservation")
 
-    if pid do
-      %{state_preservation: pid}
-    else
-      # Start it if not already running (shouldn't happen in normal tests)
-      {:ok, pid} = StatePreservation.start_link()
+    {:ok, pid} =
+      setup_isolated_genserver(StatePreservation, "state_preservation", name: state_name)
 
-      on_exit(fn ->
-        if Process.alive?(pid) do
-          GenServer.stop(pid)
-        end
-      end)
+    Process.unlink(pid)
 
-      %{state_preservation: pid}
-    end
+    {:ok, %{state_preservation: state_name}}
   end
 
   describe "capture_process_state/2" do
-    test "captures GenServer state successfully" do
+    test "captures GenServer state successfully", %{state_preservation: state_preservation} do
       # Start a test GenServer
       {:ok, test_pid} = start_test_genserver(%{counter: 0, name: "test"})
 
       # Capture its state
-      assert {:ok, capture} = StatePreservation.capture_process_state(test_pid)
+      assert {:ok, capture} =
+               StatePreservation.capture_process_state(test_pid, server: state_preservation)
 
       assert %{
                pid: ^test_pid,
@@ -72,21 +63,29 @@ defmodule Sandbox.StatePreservationTest do
              } = capture
     end
 
-    test "handles dead processes gracefully" do
+    test "handles dead processes gracefully", %{state_preservation: state_preservation} do
       # Create a process and kill it
       test_pid = spawn(fn -> :ok end)
       wait_for_process_exit(test_pid)
 
-      assert {:error, :process_dead} = StatePreservation.capture_process_state(test_pid)
+      assert {:error, :process_dead} =
+               StatePreservation.capture_process_state(test_pid, server: state_preservation)
     end
 
-    test "captures supervisor information when requested" do
+    test "captures supervisor information when requested", %{
+      state_preservation: state_preservation
+    } do
       # Start a supervised GenServer
       {:ok, supervisor_pid} = start_test_supervisor()
       {:ok, child_pid} = start_supervised_genserver(supervisor_pid, %{data: "test"})
 
       opts = [preserve_supervisor_specs: true]
-      assert {:ok, capture} = StatePreservation.capture_process_state(child_pid, opts)
+
+      assert {:ok, capture} =
+               StatePreservation.capture_process_state(
+                 child_pid,
+                 opts ++ [server: state_preservation]
+               )
 
       assert capture.supervisor_info != nil
       assert capture.supervisor_info.supervisor_pid == supervisor_pid
@@ -94,14 +93,18 @@ defmodule Sandbox.StatePreservationTest do
   end
 
   describe "capture_module_states/2" do
-    test "captures all processes using a specific module" do
+    test "captures all processes using a specific module", %{
+      state_preservation: state_preservation
+    } do
       # Start multiple GenServers using the same module
       {:ok, pid1} = start_test_genserver(%{id: 1})
       {:ok, pid2} = start_test_genserver(%{id: 2})
       {:ok, pid3} = start_test_genserver(%{id: 3})
 
       assert {:ok, captures} =
-               StatePreservation.capture_module_states(StatePreservationTestGenServer)
+               StatePreservation.capture_module_states(StatePreservationTestGenServer,
+                 server: state_preservation
+               )
 
       assert length(captures) == 3
       captured_pids = Enum.map(captures, & &1.pid)
@@ -110,8 +113,13 @@ defmodule Sandbox.StatePreservationTest do
       assert pid3 in captured_pids
     end
 
-    test "returns empty list when no processes use the module" do
-      assert {:ok, []} = StatePreservation.capture_module_states(NonExistentModule)
+    test "returns empty list when no processes use the module", %{
+      state_preservation: state_preservation
+    } do
+      assert {:ok, []} =
+               StatePreservation.capture_module_states(NonExistentModule,
+                 server: state_preservation
+               )
     end
   end
 
@@ -150,29 +158,37 @@ defmodule Sandbox.StatePreservationTest do
   end
 
   describe "restore_states/4" do
-    test "restores states with default migration" do
+    test "restores states with default migration", %{state_preservation: state_preservation} do
       # Start test GenServers
       {:ok, pid1} = start_test_genserver(%{counter: 1})
       {:ok, pid2} = start_test_genserver(%{counter: 2})
 
       # Capture their states
-      {:ok, captures} = StatePreservation.capture_module_states(StatePreservationTestGenServer)
+      {:ok, captures} =
+        StatePreservation.capture_module_states(StatePreservationTestGenServer,
+          server: state_preservation
+        )
 
       # Modify the states
       assert :ok = cast_and_sync(pid1, {:set_counter, 10})
       assert :ok = cast_and_sync(pid2, {:set_counter, 20})
 
       # Restore original states
-      assert {:ok, :restored} = StatePreservation.restore_states(captures, 1, 2)
+      assert {:ok, :restored} =
+               StatePreservation.restore_states(captures, 1, 2, server: state_preservation)
 
       # Verify states were restored
       assert %{counter: 1} = GenServer.call(pid1, :get_state)
       assert %{counter: 2} = GenServer.call(pid2, :get_state)
     end
 
-    test "applies custom migration function" do
+    test "applies custom migration function", %{state_preservation: state_preservation} do
       {:ok, pid} = start_test_genserver(%{counter: 5})
-      {:ok, [capture]} = StatePreservation.capture_module_states(StatePreservationTestGenServer)
+
+      {:ok, [capture]} =
+        StatePreservation.capture_module_states(StatePreservationTestGenServer,
+          server: state_preservation
+        )
 
       # Custom migration that doubles the counter
       migration_fn = fn old_state, _old_v, _new_v ->
@@ -180,15 +196,26 @@ defmodule Sandbox.StatePreservationTest do
       end
 
       opts = [migration_function: migration_fn]
-      assert {:ok, :restored} = StatePreservation.restore_states([capture], 1, 2, opts)
+
+      assert {:ok, :restored} =
+               StatePreservation.restore_states(
+                 [capture],
+                 1,
+                 2,
+                 opts ++ [server: state_preservation]
+               )
 
       # Verify migration was applied
       assert %{counter: 10} = GenServer.call(pid, :get_state)
     end
 
-    test "handles migration failures with rollback" do
+    test "handles migration failures with rollback", %{state_preservation: state_preservation} do
       {:ok, pid} = start_test_genserver(%{counter: 5})
-      {:ok, [capture]} = StatePreservation.capture_module_states(StatePreservationTestGenServer)
+
+      {:ok, [capture]} =
+        StatePreservation.capture_module_states(StatePreservationTestGenServer,
+          server: state_preservation
+        )
 
       # Migration function that raises an error
       migration_fn = fn _old_state, _old_v, _new_v ->
@@ -196,7 +223,14 @@ defmodule Sandbox.StatePreservationTest do
       end
 
       opts = [migration_function: migration_fn, rollback_on_failure: true]
-      assert {:error, _} = StatePreservation.restore_states([capture], 1, 2, opts)
+
+      assert {:error, _} =
+               StatePreservation.restore_states(
+                 [capture],
+                 1,
+                 2,
+                 opts ++ [server: state_preservation]
+               )
 
       # Verify original state was preserved due to rollback
       assert %{counter: 5} = GenServer.call(pid, :get_state)
@@ -204,7 +238,7 @@ defmodule Sandbox.StatePreservationTest do
   end
 
   describe "migrate_supervisor_specs/3" do
-    test "migrates supervisor child specifications" do
+    test "migrates supervisor child specifications", %{state_preservation: state_preservation} do
       {:ok, supervisor_pid} = start_test_supervisor()
       {:ok, _child_pid} = start_supervised_genserver(supervisor_pid, %{data: "test"})
 
@@ -213,31 +247,35 @@ defmodule Sandbox.StatePreservationTest do
       assert {:ok, :migrated} =
                StatePreservation.migrate_supervisor_specs(
                  supervisor_pid,
-                 StatePreservationTestGenServer
+                 StatePreservationTestGenServer,
+                 server: state_preservation
                )
     end
 
-    test "handles dead supervisor gracefully" do
+    test "handles dead supervisor gracefully", %{state_preservation: state_preservation} do
       supervisor_pid = spawn(fn -> :ok end)
       wait_for_process_exit(supervisor_pid)
 
       assert {:error, :supervisor_dead} =
                StatePreservation.migrate_supervisor_specs(
                  supervisor_pid,
-                 StatePreservationTestGenServer
+                 StatePreservationTestGenServer,
+                 server: state_preservation
                )
     end
   end
 
   describe "preserve_and_restore/4" do
-    test "completes full preservation cycle" do
+    test "completes full preservation cycle", %{state_preservation: state_preservation} do
       # Start test processes
       {:ok, pid1} = start_test_genserver(%{counter: 1, name: "first"})
       {:ok, pid2} = start_test_genserver(%{counter: 2, name: "second"})
 
       # Run complete preservation cycle
       assert {:ok, :completed} =
-               StatePreservation.preserve_and_restore(StatePreservationTestGenServer, 1, 2)
+               StatePreservation.preserve_and_restore(StatePreservationTestGenServer, 1, 2,
+                 server: state_preservation
+               )
 
       # Verify processes are still alive and functional
       assert Process.alive?(pid1)
@@ -246,7 +284,9 @@ defmodule Sandbox.StatePreservationTest do
       assert %{counter: 2} = GenServer.call(pid2, :get_state)
     end
 
-    test "handles preservation cycle with custom migration" do
+    test "handles preservation cycle with custom migration", %{
+      state_preservation: state_preservation
+    } do
       {:ok, pid} = start_test_genserver(%{counter: 5, version: 1})
 
       # Migration that updates version field
@@ -257,7 +297,12 @@ defmodule Sandbox.StatePreservationTest do
       opts = [migration_function: migration_fn]
 
       assert {:ok, :completed} =
-               StatePreservation.preserve_and_restore(StatePreservationTestGenServer, 1, 2, opts)
+               StatePreservation.preserve_and_restore(
+                 StatePreservationTestGenServer,
+                 1,
+                 2,
+                 opts ++ [server: state_preservation]
+               )
 
       # Verify migration was applied
       state = GenServer.call(pid, :get_state)
@@ -270,11 +315,28 @@ defmodule Sandbox.StatePreservationTest do
   # Helper functions for testing
 
   defp start_test_genserver(initial_state) do
-    GenServer.start_link(StatePreservationTestGenServer, initial_state)
+    {:ok, pid} =
+      setup_isolated_genserver(
+        StatePreservationTestGenServer,
+        unique_id("state_preservation"),
+        init_args: initial_state
+      )
+
+    Process.unlink(pid)
+    {:ok, pid}
   end
 
   defp start_test_supervisor do
-    Supervisor.start_link([], strategy: :one_for_one)
+    {:ok, pid} = Supervisor.start_link([], strategy: :one_for_one)
+    Process.unlink(pid)
+
+    cleanup_on_exit(fn ->
+      if Process.alive?(pid) do
+        Supervisor.stop(pid)
+      end
+    end)
+
+    {:ok, pid}
   end
 
   defp start_supervised_genserver(supervisor_pid, initial_state) do

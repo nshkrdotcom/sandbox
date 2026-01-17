@@ -15,6 +15,7 @@ defmodule Sandbox.Models.SandboxState do
           supervisor_pid: pid() | nil,
           monitor_ref: reference() | nil,
           created_at: DateTime.t(),
+          started_at_monotonic_ms: non_neg_integer(),
           updated_at: DateTime.t(),
           restart_count: non_neg_integer(),
           config: sandbox_config(),
@@ -74,6 +75,7 @@ defmodule Sandbox.Models.SandboxState do
     :supervisor_pid,
     :monitor_ref,
     :created_at,
+    :started_at_monotonic_ms,
     :updated_at,
     :restart_count,
     :config,
@@ -104,6 +106,7 @@ defmodule Sandbox.Models.SandboxState do
 
   def new(id, app_name, supervisor_module, config) do
     now = DateTime.utc_now()
+    started_at_monotonic_ms = System.monotonic_time(:millisecond)
 
     %__MODULE__{
       id: id,
@@ -114,6 +117,7 @@ defmodule Sandbox.Models.SandboxState do
       supervisor_pid: nil,
       monitor_ref: nil,
       created_at: now,
+      started_at_monotonic_ms: started_at_monotonic_ms,
       updated_at: now,
       restart_count: 0,
       config: config,

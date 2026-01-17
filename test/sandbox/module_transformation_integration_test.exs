@@ -1,5 +1,5 @@
 defmodule Sandbox.ModuleTransformationIntegrationTest do
-  use Sandbox.SerialCase
+  use Sandbox.ManagerCase
 
   alias Sandbox.Manager
 
@@ -31,7 +31,7 @@ defmodule Sandbox.ModuleTransformationIntegrationTest do
     %{test_dir: test_dir}
   end
 
-  test "creates sandbox with module transformation", %{test_dir: test_dir} do
+  test "creates sandbox with module transformation", %{test_dir: test_dir, manager: manager} do
     sandbox_id = unique_id("transform_integration_test")
 
     # Test supervisor module
@@ -53,17 +53,20 @@ defmodule Sandbox.ModuleTransformationIntegrationTest do
              Manager.create_sandbox(
                sandbox_id,
                TestSupervisor,
-               sandbox_path: test_dir
+               sandbox_path: test_dir,
+               server: manager
              )
 
     assert sandbox_info.id == sandbox_id
     assert sandbox_info.status == :running
 
-    assert :ok = Manager.destroy_sandbox(sandbox_id)
+    assert :ok = Manager.destroy_sandbox(sandbox_id, server: manager)
   end
 
-  @tag :skip
-  test "sandbox with transformed modules doesn't conflict", %{test_dir: test_dir} do
+  test "sandbox with transformed modules doesn't conflict", %{
+    test_dir: test_dir,
+    manager: manager
+  } do
     # This test would verify that multiple sandboxes can run the same modules
     # without conflicts due to module transformation
 
@@ -88,7 +91,8 @@ defmodule Sandbox.ModuleTransformationIntegrationTest do
       Manager.create_sandbox(
         sandbox_id_1,
         NoConflictSupervisor,
-        sandbox_path: test_dir
+        sandbox_path: test_dir,
+        server: manager
       )
 
     # Create second sandbox with same code
@@ -96,18 +100,41 @@ defmodule Sandbox.ModuleTransformationIntegrationTest do
       Manager.create_sandbox(
         sandbox_id_2,
         NoConflictSupervisor,
-        sandbox_path: test_dir
+        sandbox_path: test_dir,
+        server: manager
       )
 
     # Both should be running without module redefinition warnings
-    assert {:ok, info1} = Manager.get_sandbox_info(sandbox_id_1)
-    assert {:ok, info2} = Manager.get_sandbox_info(sandbox_id_2)
+    await(
+      fn ->
+        case Manager.get_sandbox_info(sandbox_id_1, server: manager) do
+          {:ok, info} -> info.status == :running
+          _ -> false
+        end
+      end,
+      timeout: 5000,
+      description: "sandbox #{sandbox_id_1} ready"
+    )
+
+    await(
+      fn ->
+        case Manager.get_sandbox_info(sandbox_id_2, server: manager) do
+          {:ok, info} -> info.status == :running
+          _ -> false
+        end
+      end,
+      timeout: 5000,
+      description: "sandbox #{sandbox_id_2} ready"
+    )
+
+    assert {:ok, info1} = Manager.get_sandbox_info(sandbox_id_1, server: manager)
+    assert {:ok, info2} = Manager.get_sandbox_info(sandbox_id_2, server: manager)
 
     assert info1.status == :running
     assert info2.status == :running
 
     # Clean up
-    Manager.destroy_sandbox(sandbox_id_1)
-    Manager.destroy_sandbox(sandbox_id_2)
+    Manager.destroy_sandbox(sandbox_id_1, server: manager)
+    Manager.destroy_sandbox(sandbox_id_2, server: manager)
   end
 end

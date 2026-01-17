@@ -1,12 +1,12 @@
 defmodule Sandbox.ManagerTest do
-  use Sandbox.SerialCase
+  use Sandbox.ManagerCase
 
   alias Sandbox.Manager
 
   @moduletag :capture_log
 
   describe "process monitoring and lifecycle management" do
-    test "creates sandbox with comprehensive monitoring" do
+    test "creates sandbox with comprehensive monitoring", %{manager: manager, tables: tables} do
       # Use the existing manager from the application
 
       # Create a simple test supervisor
@@ -33,7 +33,8 @@ defmodule Sandbox.ManagerTest do
                Manager.create_sandbox(
                  sandbox_id,
                  TestSupervisor,
-                 sandbox_path: fixture_path()
+                 sandbox_path: fixture_path(),
+                 server: manager
                )
 
       # Verify sandbox info structure
@@ -52,19 +53,22 @@ defmodule Sandbox.ManagerTest do
       assert Process.alive?(supervisor_pid)
 
       # Verify ETS entries
-      assert [{^sandbox_id, stored_info}] = :ets.lookup(:sandboxes, sandbox_id)
+      assert [{^sandbox_id, stored_info}] = :ets.lookup(tables.sandboxes, sandbox_id)
       assert stored_info.id == sandbox_id
       assert stored_info.status == :running
 
       # Verify monitoring is set up by checking the sandbox is tracked
-      assert {:ok, current_info} = Manager.get_sandbox_info(sandbox_id)
+      assert {:ok, current_info} = Manager.get_sandbox_info(sandbox_id, server: manager)
       assert current_info.status == :running
 
       # Cleanup
-      assert :ok = Manager.destroy_sandbox(sandbox_id)
+      assert :ok = Manager.destroy_sandbox(sandbox_id, server: manager)
     end
 
-    test "handles sandbox process crashes with proper cleanup" do
+    test "handles sandbox process crashes with proper cleanup", %{
+      manager: manager,
+      tables: tables
+    } do
       # Use the existing manager from the application
 
       defmodule CrashingSupervisor do
@@ -95,7 +99,8 @@ defmodule Sandbox.ManagerTest do
                  sandbox_id,
                  CrashingSupervisor,
                  sandbox_path: fixture_path(),
-                 supervisor_module: CrashingSupervisor
+                 supervisor_module: CrashingSupervisor,
+                 server: manager
                )
 
       supervisor_pid = sandbox_info.supervisor_pid
@@ -108,7 +113,7 @@ defmodule Sandbox.ManagerTest do
 
       await(
         fn ->
-          case Manager.get_sandbox_info(sandbox_id) do
+          case Manager.get_sandbox_info(sandbox_id, server: manager) do
             {:ok, info} -> info.status == :error
             {:error, :not_found} -> true
             _ -> false
@@ -119,7 +124,7 @@ defmodule Sandbox.ManagerTest do
       )
 
       # Verify cleanup occurred
-      case Manager.get_sandbox_info(sandbox_id) do
+      case Manager.get_sandbox_info(sandbox_id, server: manager) do
         {:ok, info} ->
           assert info.status == :error
           refute Process.alive?(supervisor_pid)
@@ -130,10 +135,10 @@ defmodule Sandbox.ManagerTest do
       end
 
       # Verify cleanup occurred in ETS
-      assert [] = :ets.lookup(:sandboxes, sandbox_id)
+      assert [] = :ets.lookup(tables.sandboxes, sandbox_id)
     end
 
-    test "tracks sandbox state transitions correctly" do
+    test "tracks sandbox state transitions correctly", %{manager: manager} do
       # Use the existing manager from the application
 
       defmodule StatefulSupervisor do
@@ -159,14 +164,15 @@ defmodule Sandbox.ManagerTest do
                Manager.create_sandbox(
                  sandbox_id,
                  StatefulSupervisor,
-                 sandbox_path: fixture_path()
+                 sandbox_path: fixture_path(),
+                 server: manager
                )
 
       assert sandbox_info.status == :running
       assert sandbox_info.restart_count == 0
 
       # Restart sandbox and verify state transition
-      assert {:ok, restarted_info} = Manager.restart_sandbox(sandbox_id)
+      assert {:ok, restarted_info} = Manager.restart_sandbox(sandbox_id, server: manager)
       assert restarted_info.status == :running
       assert restarted_info.restart_count == 1
       assert restarted_info.id == sandbox_id
@@ -176,10 +182,10 @@ defmodule Sandbox.ManagerTest do
       assert restarted_info.id == sandbox_info.id
 
       # Cleanup
-      assert :ok = Manager.destroy_sandbox(sandbox_id)
+      assert :ok = Manager.destroy_sandbox(sandbox_id, server: manager)
     end
 
-    test "handles concurrent sandbox operations safely" do
+    test "handles concurrent sandbox operations safely", %{manager: manager} do
       # Use the existing manager from the application
 
       defmodule ConcurrentSupervisor do
@@ -207,7 +213,8 @@ defmodule Sandbox.ManagerTest do
             Manager.create_sandbox(
               sandbox_id,
               ConcurrentSupervisor,
-              sandbox_path: fixture_path()
+              sandbox_path: fixture_path(),
+              server: manager
             )
           end)
         end)
@@ -220,7 +227,7 @@ defmodule Sandbox.ManagerTest do
       end)
 
       # Verify all sandboxes are listed
-      all_sandboxes = Manager.list_sandboxes()
+      all_sandboxes = Manager.list_sandboxes(server: manager)
       created_ids = Enum.map(all_sandboxes, & &1.id)
 
       Enum.each(sandbox_ids, fn sandbox_id ->
@@ -230,7 +237,7 @@ defmodule Sandbox.ManagerTest do
       # Cleanup all sandboxes concurrently
       cleanup_tasks =
         Enum.map(sandbox_ids, fn sandbox_id ->
-          Task.async(fn -> Manager.destroy_sandbox(sandbox_id) end)
+          Task.async(fn -> Manager.destroy_sandbox(sandbox_id, server: manager) end)
         end)
 
       cleanup_results = Task.await_many(cleanup_tasks, 5000)
@@ -241,7 +248,7 @@ defmodule Sandbox.ManagerTest do
       end)
 
       # Verify no sandboxes remain
-      final_sandboxes = Manager.list_sandboxes()
+      final_sandboxes = Manager.list_sandboxes(server: manager)
       final_ids = Enum.map(final_sandboxes, & &1.id)
 
       Enum.each(sandbox_ids, fn sandbox_id ->
@@ -249,7 +256,7 @@ defmodule Sandbox.ManagerTest do
       end)
     end
 
-    test "provides detailed status reporting" do
+    test "provides detailed status reporting", %{manager: manager} do
       # Use the existing manager from the application
 
       defmodule DetailedSupervisor do
@@ -275,11 +282,12 @@ defmodule Sandbox.ManagerTest do
                  sandbox_id,
                  DetailedSupervisor,
                  sandbox_path: fixture_path(),
-                 resource_limits: %{max_memory: 64 * 1024 * 1024}
+                 resource_limits: %{max_memory: 64 * 1024 * 1024},
+                 server: manager
                )
 
       # Verify detailed information is available
-      assert {:ok, detailed_info} = Manager.get_sandbox_info(sandbox_id)
+      assert {:ok, detailed_info} = Manager.get_sandbox_info(sandbox_id, server: manager)
 
       assert %{
                id: ^sandbox_id,
@@ -298,16 +306,16 @@ defmodule Sandbox.ManagerTest do
       assert is_integer(processes) and processes > 0
       assert is_integer(uptime) and uptime >= 0
 
-      assert {:ok, updated_info} = Manager.get_sandbox_info(sandbox_id)
+      assert {:ok, updated_info} = Manager.get_sandbox_info(sandbox_id, server: manager)
       assert updated_info.resource_usage.uptime >= detailed_info.resource_usage.uptime
 
       # Cleanup
-      assert :ok = Manager.destroy_sandbox(sandbox_id)
+      assert :ok = Manager.destroy_sandbox(sandbox_id, server: manager)
     end
   end
 
   describe "ETS operations and conflict resolution" do
-    test "handles ETS conflicts gracefully" do
+    test "handles ETS conflicts gracefully", %{manager: manager} do
       # Use the existing manager from the application
 
       defmodule ConflictSupervisor do
@@ -330,7 +338,8 @@ defmodule Sandbox.ManagerTest do
                Manager.create_sandbox(
                  sandbox_id,
                  ConflictSupervisor,
-                 sandbox_path: fixture_path()
+                 sandbox_path: fixture_path(),
+                 server: manager
                )
 
       # Attempt to create second sandbox with same ID
@@ -338,30 +347,31 @@ defmodule Sandbox.ManagerTest do
                Manager.create_sandbox(
                  sandbox_id,
                  ConflictSupervisor,
-                 sandbox_path: fixture_path()
+                 sandbox_path: fixture_path(),
+                 server: manager
                )
 
       assert existing_info.id == sandbox_id
       assert existing_info.status == :running
 
       # Cleanup
-      assert :ok = Manager.destroy_sandbox(sandbox_id)
+      assert :ok = Manager.destroy_sandbox(sandbox_id, server: manager)
     end
 
-    test "maintains ETS consistency during failures" do
+    test "maintains ETS consistency during failures", %{manager: manager, tables: tables} do
       # Use the existing manager from the application
 
       # Simulate ETS corruption by directly manipulating tables
       sandbox_id = unique_id("test-ets-consistency")
 
       # Insert invalid entry directly into ETS
-      :ets.insert(:sandboxes, {sandbox_id, %{invalid: :entry}})
+      :ets.insert(tables.sandboxes, {sandbox_id, %{invalid: :entry}})
 
       # Verify manager handles this gracefully
-      assert {:error, :not_found} = Manager.get_sandbox_info(sandbox_id)
+      assert {:error, :not_found} = Manager.get_sandbox_info(sandbox_id, server: manager)
 
       # Verify manager handles invalid entries gracefully
-      assert {:error, :not_found} = Manager.get_sandbox_info(sandbox_id)
+      assert {:error, :not_found} = Manager.get_sandbox_info(sandbox_id, server: manager)
     end
   end
 

@@ -17,11 +17,14 @@ defmodule Sandbox.ProcessIsolator do
   use GenServer
   require Logger
 
+  alias Sandbox.Config
+
   @doc """
   Starts the process isolator.
   """
   def start_link(opts \\ []) do
-    GenServer.start_link(__MODULE__, opts, name: __MODULE__)
+    name = Keyword.get(opts, :name, __MODULE__)
+    GenServer.start_link(__MODULE__, opts, name: name)
   end
 
   @doc """
@@ -40,9 +43,11 @@ defmodule Sandbox.ProcessIsolator do
   - `{:error, reason}` - Isolation setup failed
   """
   def create_isolated_context(sandbox_id, supervisor_module, opts \\ []) do
+    {server, call_opts} = split_server_opts(opts)
+
     GenServer.call(
-      __MODULE__,
-      {:create_isolated_context, sandbox_id, supervisor_module, opts},
+      server,
+      {:create_isolated_context, sandbox_id, supervisor_module, call_opts},
       30_000
     )
   end
@@ -57,8 +62,9 @@ defmodule Sandbox.ProcessIsolator do
   - `:ok` - Context destroyed successfully
   - `{:error, reason}` - Destruction failed
   """
-  def destroy_isolated_context(sandbox_id) do
-    GenServer.call(__MODULE__, {:destroy_isolated_context, sandbox_id}, 15_000)
+  def destroy_isolated_context(sandbox_id, opts \\ []) do
+    server = Keyword.get(opts, :server, __MODULE__)
+    GenServer.call(server, {:destroy_isolated_context, sandbox_id}, 15_000)
   end
 
   @doc """
@@ -71,8 +77,9 @@ defmodule Sandbox.ProcessIsolator do
   - `{:ok, context_info}` - Context information
   - `{:error, :not_found}` - Context doesn't exist
   """
-  def get_context_info(sandbox_id) do
-    GenServer.call(__MODULE__, {:get_context_info, sandbox_id})
+  def get_context_info(sandbox_id, opts \\ []) do
+    server = Keyword.get(opts, :server, __MODULE__)
+    GenServer.call(server, {:get_context_info, sandbox_id})
   end
 
   @doc """
@@ -81,8 +88,9 @@ defmodule Sandbox.ProcessIsolator do
   ## Returns
   - List of context information maps
   """
-  def list_contexts do
-    GenServer.call(__MODULE__, :list_contexts)
+  def list_contexts(opts \\ []) do
+    server = Keyword.get(opts, :server, __MODULE__)
+    GenServer.call(server, :list_contexts)
   end
 
   @doc """
@@ -98,34 +106,28 @@ defmodule Sandbox.ProcessIsolator do
   - `{:error, reason}` - Send failed
   """
   def send_message_to_sandbox(sandbox_id, message, opts \\ []) do
-    GenServer.call(__MODULE__, {:send_message, sandbox_id, message, opts})
+    {server, call_opts} = split_server_opts(opts)
+    GenServer.call(server, {:send_message, sandbox_id, message, call_opts})
   end
 
   # GenServer implementation
 
   @impl true
-  def init(_opts) do
-    # Create ETS table for tracking isolated contexts
-    case :ets.info(:sandbox_isolation_contexts) do
-      :undefined ->
-        :ets.new(:sandbox_isolation_contexts, [
-          :named_table,
-          :set,
-          :public,
-          {:read_concurrency, true}
-        ])
+  def init(opts) do
+    table_name = Keyword.get(opts, :table_name) || Config.table_name(:isolation_contexts, opts)
 
-        Logger.info("Created ETS table for sandbox isolation contexts")
-
-      _ ->
-        Logger.info("ETS table :sandbox_isolation_contexts already exists, clearing it")
-        :ets.delete_all_objects(:sandbox_isolation_contexts)
-    end
+    ensure_table(table_name, [
+      :named_table,
+      :set,
+      :public,
+      {:read_concurrency, true}
+    ])
 
     state = %{
       contexts: %{},
       monitors: %{},
-      resource_tracker: nil
+      resource_tracker: nil,
+      table_name: table_name
     }
 
     Logger.info("Process isolator started successfully")
@@ -254,7 +256,7 @@ defmodule Sandbox.ProcessIsolator do
           }
 
           # Store in ETS for fast lookup
-          :ets.insert(:sandbox_isolation_contexts, {sandbox_id, context})
+          :ets.insert(state.table_name, {sandbox_id, context})
 
           # Update state
           updated_state = %{
@@ -288,7 +290,7 @@ defmodule Sandbox.ProcessIsolator do
         end
 
         # Remove from ETS
-        :ets.delete(:sandbox_isolation_contexts, sandbox_id)
+        :ets.delete(state.table_name, sandbox_id)
 
         # Update state
         updated_state = %{
@@ -584,7 +586,7 @@ defmodule Sandbox.ProcessIsolator do
 
   defp cleanup_crashed_context(sandbox_id, monitor_ref, state) do
     # Remove from ETS
-    :ets.delete(:sandbox_isolation_contexts, sandbox_id)
+    :ets.delete(state.table_name, sandbox_id)
 
     # Update state
     %{
@@ -608,5 +610,26 @@ defmodule Sandbox.ProcessIsolator do
       # 5 minutes
       max_execution_time: 300_000
     }
+  end
+
+  defp split_server_opts(opts) do
+    server = Keyword.get(opts, :server, __MODULE__)
+    call_opts = Keyword.delete(opts, :server)
+    {server, call_opts}
+  end
+
+  defp ensure_table(table_name, opts) do
+    case :ets.whereis(table_name) do
+      :undefined ->
+        try do
+          :ets.new(table_name, opts)
+        catch
+          :error, :badarg ->
+            table_name
+        end
+
+      _ ->
+        table_name
+    end
   end
 end

@@ -1,88 +1,104 @@
 defmodule Sandbox.ApplicationTest do
-  use Sandbox.SerialCase
+  use Sandbox.TestCase
 
-  # Clean ETS table contents before each test to ensure isolation
-  # without causing race conditions on table existence
   setup do
-    for table <- [:sandbox_registry, :sandbox_modules, :sandbox_resources, :sandbox_security] do
-      case :ets.whereis(table) do
-        :undefined -> :ok
-        _ref -> :ets.delete_all_objects(table)
-      end
-    end
+    table_names =
+      unique_atoms("app_tables", [
+        :sandbox_registry,
+        :sandbox_modules,
+        :sandbox_resources,
+        :sandbox_security
+      ])
 
-    :ok
+    cleanup_on_exit(fn ->
+      [
+        table_names.sandbox_registry,
+        table_names.sandbox_modules,
+        table_names.sandbox_resources,
+        table_names.sandbox_security
+      ]
+      |> Enum.each(fn table ->
+        if :ets.whereis(table) != :undefined do
+          :ets.delete(table)
+        end
+      end)
+    end)
+
+    {:ok, %{table_names: table_names}}
   end
 
   describe "ETS table initialization" do
-    test "creates all required ETS tables" do
+    test "creates all required ETS tables", %{table_names: table_names} do
       # Initialize tables (idempotent operation)
-      :ok = Sandbox.Application.init_ets_tables()
+      :ok = Sandbox.Application.init_ets_tables(table_names: table_names)
 
       # Verify all tables exist
-      assert :ets.whereis(:sandbox_registry) != :undefined
-      assert :ets.whereis(:sandbox_modules) != :undefined
-      assert :ets.whereis(:sandbox_resources) != :undefined
-      assert :ets.whereis(:sandbox_security) != :undefined
+      assert :ets.whereis(table_names.sandbox_registry) != :undefined
+      assert :ets.whereis(table_names.sandbox_modules) != :undefined
+      assert :ets.whereis(table_names.sandbox_resources) != :undefined
+      assert :ets.whereis(table_names.sandbox_security) != :undefined
 
       # Verify table properties
-      registry_info = :ets.info(:sandbox_registry)
+      registry_info = :ets.info(table_names.sandbox_registry)
       assert registry_info[:type] == :set
       assert registry_info[:protection] == :public
 
-      modules_info = :ets.info(:sandbox_modules)
+      modules_info = :ets.info(table_names.sandbox_modules)
       assert modules_info[:type] == :bag
       assert modules_info[:protection] == :public
     end
 
-    test "get_ets_info returns table information" do
+    test "get_ets_info returns table information", %{table_names: table_names} do
       # Ensure tables exist (idempotent)
-      :ok = Sandbox.Application.init_ets_tables()
+      :ok = Sandbox.Application.init_ets_tables(table_names: table_names)
 
-      info = Sandbox.Application.get_ets_info()
+      info = Sandbox.Application.get_ets_info(table_names: table_names)
 
-      assert Map.has_key?(info, :sandbox_registry)
-      assert Map.has_key?(info, :sandbox_modules)
-      assert Map.has_key?(info, :sandbox_resources)
-      assert Map.has_key?(info, :sandbox_security)
+      assert Map.has_key?(info, table_names.sandbox_registry)
+      assert Map.has_key?(info, table_names.sandbox_modules)
+      assert Map.has_key?(info, table_names.sandbox_resources)
+      assert Map.has_key?(info, table_names.sandbox_security)
 
-      registry_info = info[:sandbox_registry]
+      registry_info = info[table_names.sandbox_registry]
       assert is_integer(registry_info.size)
       assert is_integer(registry_info.memory)
       assert registry_info.type == :set
     end
 
-    test "init_ets_tables is idempotent" do
+    test "init_ets_tables is idempotent", %{table_names: table_names} do
       # Call multiple times should not fail
-      :ok = Sandbox.Application.init_ets_tables()
-      :ok = Sandbox.Application.init_ets_tables()
-      :ok = Sandbox.Application.init_ets_tables()
+      :ok = Sandbox.Application.init_ets_tables(table_names: table_names)
+      :ok = Sandbox.Application.init_ets_tables(table_names: table_names)
+      :ok = Sandbox.Application.init_ets_tables(table_names: table_names)
 
       # Verify tables still exist and work correctly
-      assert :ets.whereis(:sandbox_registry) != :undefined
-      assert :ets.whereis(:sandbox_modules) != :undefined
-      assert :ets.whereis(:sandbox_resources) != :undefined
-      assert :ets.whereis(:sandbox_security) != :undefined
+      assert :ets.whereis(table_names.sandbox_registry) != :undefined
+      assert :ets.whereis(table_names.sandbox_modules) != :undefined
+      assert :ets.whereis(table_names.sandbox_resources) != :undefined
+      assert :ets.whereis(table_names.sandbox_security) != :undefined
     end
   end
 
   describe "application lifecycle" do
-    test "application can start and stop" do
-      # Note: This test assumes the application is not already running
-      # In a real test environment, you might need to handle this differently
+    test "stop does not delete ETS tables by default", %{table_names: table_names} do
+      :ok = Sandbox.Application.init_ets_tables(table_names: table_names)
+      :ets.insert(table_names.sandbox_registry, {:persisted, true})
 
-      case Application.start(:sandbox) do
-        :ok ->
-          # Verify ETS tables are created
-          assert :ets.whereis(:sandbox_registry) != :undefined
+      :ok = Sandbox.Application.stop(%{table_names: table_names, cleanup_ets_on_stop: false})
 
-          # Stop the application
-          :ok = Application.stop(:sandbox)
+      assert :ets.whereis(table_names.sandbox_registry) != :undefined
 
-        {:error, {:already_started, :sandbox}} ->
-          # Application is already running, which is fine for this test
-          :ok
-      end
+      assert [{:persisted, true}] =
+               :ets.lookup(table_names.sandbox_registry, :persisted)
+    end
+
+    test "stop deletes ETS tables when cleanup is enabled", %{table_names: table_names} do
+      :ok = Sandbox.Application.init_ets_tables(table_names: table_names)
+      :ets.insert(table_names.sandbox_registry, {:persisted, true})
+
+      :ok = Sandbox.Application.stop(%{table_names: table_names, cleanup_ets_on_stop: true})
+
+      assert :ets.whereis(table_names.sandbox_registry) == :undefined
     end
   end
 end

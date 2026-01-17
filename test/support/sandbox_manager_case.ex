@@ -1,6 +1,6 @@
-defmodule Sandbox.SerialCase do
+defmodule Sandbox.ManagerCase do
   defmacro __using__(opts) do
-    isolation = Keyword.get(opts, :isolation, :contamination_detection)
+    isolation = Keyword.get(opts, :isolation, :full_isolation)
     telemetry_isolation = Keyword.get(opts, :telemetry_isolation, true)
     logger_isolation = Keyword.get(opts, :logger_isolation, true)
     ets_isolation = Keyword.get(opts, :ets_isolation, [])
@@ -17,6 +17,11 @@ defmodule Sandbox.SerialCase do
       import Supertester.GenServerHelpers
       import Supertester.OTPHelpers
       import Supertester.SupervisorHelpers
+
+      setup _context do
+        {:ok, services} = Sandbox.TestHelpers.start_isolated_services()
+        {:ok, services}
+      end
     end
   end
 end

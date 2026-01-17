@@ -17,6 +17,8 @@ defmodule Sandbox.VirtualCodeTable do
 
   require Logger
 
+  alias Sandbox.Config
+
   @doc """
   Creates a virtual code table for a sandbox.
 
@@ -37,7 +39,7 @@ defmodule Sandbox.VirtualCodeTable do
       true
   """
   def create_table(sandbox_id, opts \\ []) do
-    table_name = table_name_for_sandbox(sandbox_id)
+    table_name = table_name_for_sandbox(sandbox_id, opts)
     access = Keyword.get(opts, :access, :public)
     read_concurrency = Keyword.get(opts, :read_concurrency, true)
     write_concurrency = Keyword.get(opts, :write_concurrency, false)
@@ -102,7 +104,7 @@ defmodule Sandbox.VirtualCodeTable do
   """
   def load_module(sandbox_id, module, beam_data, opts \\ [])
       when is_atom(module) and is_binary(beam_data) do
-    table_name = table_name_for_sandbox(sandbox_id)
+    table_name = table_name_for_sandbox(sandbox_id, opts)
     force_reload = Keyword.get(opts, :force_reload, false)
     extract_metadata = Keyword.get(opts, :extract_metadata, true)
 
@@ -165,8 +167,8 @@ defmodule Sandbox.VirtualCodeTable do
       iex> VirtualCodeTable.fetch_module("test", :MyModule)
       {:ok, %{beam_data: <<...>>, loaded_at: 123456789, ...}}
   """
-  def fetch_module(sandbox_id, module) when is_atom(module) do
-    table_name = table_name_for_sandbox(sandbox_id)
+  def fetch_module(sandbox_id, module, opts \\ []) when is_atom(module) do
+    table_name = table_name_for_sandbox(sandbox_id, opts)
 
     case :ets.whereis(table_name) do
       :undefined ->
@@ -202,7 +204,7 @@ defmodule Sandbox.VirtualCodeTable do
   - `{:error, :table_not_found}` - Virtual code table doesn't exist
   """
   def list_modules(sandbox_id, opts \\ []) do
-    table_name = table_name_for_sandbox(sandbox_id)
+    table_name = table_name_for_sandbox(sandbox_id, opts)
     include_metadata = Keyword.get(opts, :include_metadata, false)
     sort_by = Keyword.get(opts, :sort_by, :name)
 
@@ -245,8 +247,8 @@ defmodule Sandbox.VirtualCodeTable do
   - `{:error, :not_loaded}` - Module not found
   - `{:error, :table_not_found}` - Virtual code table doesn't exist
   """
-  def unload_module(sandbox_id, module) when is_atom(module) do
-    table_name = table_name_for_sandbox(sandbox_id)
+  def unload_module(sandbox_id, module, opts \\ []) when is_atom(module) do
+    table_name = table_name_for_sandbox(sandbox_id, opts)
 
     case :ets.whereis(table_name) do
       :undefined ->
@@ -280,8 +282,8 @@ defmodule Sandbox.VirtualCodeTable do
   - `:ok` - Table destroyed successfully
   - `{:error, :table_not_found}` - Table doesn't exist
   """
-  def destroy_table(sandbox_id) do
-    table_name = table_name_for_sandbox(sandbox_id)
+  def destroy_table(sandbox_id, opts \\ []) do
+    table_name = table_name_for_sandbox(sandbox_id, opts)
 
     case :ets.whereis(table_name) do
       :undefined ->
@@ -308,8 +310,8 @@ defmodule Sandbox.VirtualCodeTable do
   - `{:ok, stats}` - Table statistics
   - `{:error, :table_not_found}` - Table doesn't exist
   """
-  def get_table_stats(sandbox_id) do
-    table_name = table_name_for_sandbox(sandbox_id)
+  def get_table_stats(sandbox_id, opts \\ []) do
+    table_name = table_name_for_sandbox(sandbox_id, opts)
 
     case :ets.whereis(table_name) do
       :undefined ->
@@ -339,8 +341,14 @@ defmodule Sandbox.VirtualCodeTable do
 
   # Private helper functions
 
-  defp table_name_for_sandbox(sandbox_id) do
-    :"sandbox_code_#{sandbox_id}"
+  defp table_name_for_sandbox(sandbox_id, opts) do
+    prefix =
+      case Keyword.get(opts, :table_prefix) do
+        nil -> Config.table_prefix(:virtual_code, opts)
+        value -> value
+      end
+
+    :"#{to_string(prefix)}_#{sandbox_id}"
   end
 
   defp compute_checksum(beam_data) do

@@ -46,7 +46,8 @@ defmodule Sandbox.StatePreservation do
   Starts the StatePreservation GenServer.
   """
   def start_link(opts \\ []) do
-    GenServer.start_link(__MODULE__, opts, name: __MODULE__)
+    name = Keyword.get(opts, :name, __MODULE__)
+    GenServer.start_link(__MODULE__, opts, name: name)
   end
 
   @doc """
@@ -55,7 +56,8 @@ defmodule Sandbox.StatePreservation do
   @spec capture_module_states(atom(), preservation_options()) ::
           {:ok, [state_capture()]} | {:error, any()}
   def capture_module_states(module, opts \\ []) do
-    GenServer.call(__MODULE__, {:capture_module_states, module, opts}, 30_000)
+    {server, call_opts} = split_server_opts(opts)
+    GenServer.call(server, {:capture_module_states, module, call_opts}, 30_000)
   end
 
   @doc """
@@ -64,7 +66,8 @@ defmodule Sandbox.StatePreservation do
   @spec capture_process_state(pid(), preservation_options()) ::
           {:ok, state_capture()} | {:error, any()}
   def capture_process_state(pid, opts \\ []) do
-    GenServer.call(__MODULE__, {:capture_process_state, pid, opts})
+    {server, call_opts} = split_server_opts(opts)
+    GenServer.call(server, {:capture_process_state, pid, call_opts})
   end
 
   @doc """
@@ -78,9 +81,11 @@ defmodule Sandbox.StatePreservation do
         ) ::
           {:ok, :restored} | {:error, any()}
   def restore_states(captured_states, old_version, new_version, opts \\ []) do
+    {server, call_opts} = split_server_opts(opts)
+
     GenServer.call(
-      __MODULE__,
-      {:restore_states, captured_states, old_version, new_version, opts},
+      server,
+      {:restore_states, captured_states, old_version, new_version, call_opts},
       30_000
     )
   end
@@ -100,7 +105,8 @@ defmodule Sandbox.StatePreservation do
   @spec migrate_supervisor_specs(pid(), atom(), preservation_options()) ::
           {:ok, :migrated} | {:error, any()}
   def migrate_supervisor_specs(supervisor_pid, new_module, opts \\ []) do
-    GenServer.call(__MODULE__, {:migrate_supervisor_specs, supervisor_pid, new_module, opts})
+    {server, call_opts} = split_server_opts(opts)
+    GenServer.call(server, {:migrate_supervisor_specs, supervisor_pid, new_module, call_opts})
   end
 
   @doc """
@@ -109,9 +115,11 @@ defmodule Sandbox.StatePreservation do
   @spec preserve_and_restore(atom(), non_neg_integer(), non_neg_integer(), preservation_options()) ::
           {:ok, :completed} | {:error, any()}
   def preserve_and_restore(module, old_version, new_version, opts \\ []) do
+    {server, call_opts} = split_server_opts(opts)
+
     GenServer.call(
-      __MODULE__,
-      {:preserve_and_restore, module, old_version, new_version, opts},
+      server,
+      {:preserve_and_restore, module, old_version, new_version, call_opts},
       60_000
     )
   end
@@ -748,5 +756,11 @@ defmodule Sandbox.StatePreservation do
         _ -> :ok
       end
     end)
+  end
+
+  defp split_server_opts(opts) do
+    server = Keyword.get(opts, :server, __MODULE__)
+    call_opts = Keyword.delete(opts, :server)
+    {server, call_opts}
   end
 end

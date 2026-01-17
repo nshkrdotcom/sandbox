@@ -19,11 +19,13 @@ defmodule Sandbox.Manager do
   alias Sandbox.ProcessIsolator
   alias Sandbox.VirtualCodeTable
   alias Sandbox.Models.SandboxState
+  alias Sandbox.Config
 
   # Public API
 
   def start_link(opts \\ []) do
-    GenServer.start_link(__MODULE__, opts, name: __MODULE__)
+    name = Keyword.get(opts, :name, __MODULE__)
+    GenServer.start_link(__MODULE__, opts, name: name)
   end
 
   @doc """
@@ -60,7 +62,8 @@ defmodule Sandbox.Manager do
       {:ok, %{id: "test-sandbox", ...}}
   """
   def create_sandbox(sandbox_id, module_or_app, opts \\ []) do
-    GenServer.call(__MODULE__, {:create_sandbox, sandbox_id, module_or_app, opts}, 30_000)
+    {server, call_opts} = split_server_opts(opts)
+    GenServer.call(server, {:create_sandbox, sandbox_id, module_or_app, call_opts}, 30_000)
   end
 
   @doc """
@@ -78,8 +81,9 @@ defmodule Sandbox.Manager do
       iex> destroy_sandbox("my-sandbox")
       :ok
   """
-  def destroy_sandbox(sandbox_id) do
-    GenServer.call(__MODULE__, {:destroy_sandbox, sandbox_id}, 15_000)
+  def destroy_sandbox(sandbox_id, opts \\ []) do
+    server = Keyword.get(opts, :server, __MODULE__)
+    GenServer.call(server, {:destroy_sandbox, sandbox_id}, 15_000)
   end
 
   @doc """
@@ -93,15 +97,18 @@ defmodule Sandbox.Manager do
       iex> restart_sandbox("my-sandbox")
       {:ok, %{id: "my-sandbox", restart_count: 1, ...}}
   """
-  def restart_sandbox(sandbox_id) do
-    GenServer.call(__MODULE__, {:restart_sandbox, sandbox_id}, 30_000)
+  def restart_sandbox(sandbox_id, opts \\ []) do
+    server = Keyword.get(opts, :server, __MODULE__)
+    GenServer.call(server, {:restart_sandbox, sandbox_id}, 30_000)
   end
 
   @doc """
   Hot-reloads a sandbox with new code.
   """
   def hot_reload_sandbox(sandbox_id, new_beam_data, opts \\ []) do
-    GenServer.call(__MODULE__, {:hot_reload_sandbox, sandbox_id, new_beam_data, opts}, 30_000)
+    {server, call_opts} = split_server_opts(opts)
+
+    GenServer.call(server, {:hot_reload_sandbox, sandbox_id, new_beam_data, call_opts}, 30_000)
   end
 
   @doc """
@@ -124,8 +131,9 @@ defmodule Sandbox.Manager do
         ...
       }}
   """
-  def get_sandbox_info(sandbox_id) do
-    GenServer.call(__MODULE__, {:get_sandbox_info, sandbox_id})
+  def get_sandbox_info(sandbox_id, opts \\ []) do
+    server = Keyword.get(opts, :server, __MODULE__)
+    GenServer.call(server, {:get_sandbox_info, sandbox_id})
   end
 
   @doc """
@@ -142,55 +150,49 @@ defmodule Sandbox.Manager do
         %{id: "sandbox-2", status: :stopped, ...}
       ]
   """
-  def list_sandboxes do
-    GenServer.call(__MODULE__, :list_sandboxes)
+  def list_sandboxes(opts \\ []) do
+    server = Keyword.get(opts, :server, __MODULE__)
+    GenServer.call(server, :list_sandboxes)
   end
 
   @doc """
   Gets the main process PID for a sandbox.
   """
-  def get_sandbox_pid(sandbox_id) do
-    GenServer.call(__MODULE__, {:get_sandbox_pid, sandbox_id})
+  def get_sandbox_pid(sandbox_id, opts \\ []) do
+    server = Keyword.get(opts, :server, __MODULE__)
+    GenServer.call(server, {:get_sandbox_pid, sandbox_id})
   end
 
   @doc """
   Synchronizes state (useful for testing).
   """
-  def sync do
-    GenServer.call(__MODULE__, :sync)
+  def sync(opts \\ []) do
+    server = Keyword.get(opts, :server, __MODULE__)
+    GenServer.call(server, :sync)
   end
 
   # GenServer Callbacks
 
   @impl true
-  def init(_opts) do
-    # Initialize ETS tables for fast sandbox lookup and registry management
-    case :ets.info(:sandboxes) do
-      :undefined ->
-        :ets.new(:sandboxes, [:named_table, :set, :public, {:read_concurrency, true}])
-        Logger.info("Created new ETS table :sandboxes with read concurrency")
+  def init(opts) do
+    table_names = Config.table_names(opts)
+    services = Config.service_names(opts)
+    table_prefixes = Config.table_prefixes(opts)
 
-      _ ->
-        Logger.info("ETS table :sandboxes already exists, clearing it")
-        :ets.delete_all_objects(:sandboxes)
-    end
+    sandboxes_table = table_names.sandboxes
+    monitors_table = table_names.sandbox_monitors
 
-    # Create additional ETS table for process monitoring
-    case :ets.info(:sandbox_monitors) do
-      :undefined ->
-        :ets.new(:sandbox_monitors, [:named_table, :set, :public])
-        Logger.info("Created new ETS table :sandbox_monitors")
-
-      _ ->
-        Logger.info("ETS table :sandbox_monitors already exists, clearing it")
-        :ets.delete_all_objects(:sandbox_monitors)
-    end
+    ensure_table(sandboxes_table, [:named_table, :set, :public, {:read_concurrency, true}])
+    ensure_table(monitors_table, [:named_table, :set, :public])
 
     state = %{
       sandboxes: %{},
       monitors: %{},
       cleanup_tasks: %{},
-      next_cleanup_id: 1
+      next_cleanup_id: 1,
+      tables: %{sandboxes: sandboxes_table, sandbox_monitors: monitors_table},
+      services: services,
+      table_prefixes: table_prefixes
     }
 
     Logger.info("Enhanced Sandbox.Manager started with comprehensive monitoring")
@@ -228,7 +230,7 @@ defmodule Sandbox.Manager do
       {sandbox_state, monitor_ref} ->
         # Update status to stopping
         stopping_state = SandboxState.update_status(sandbox_state, :stopping)
-        :ets.insert(:sandboxes, {sandbox_id, SandboxState.to_info(stopping_state)})
+        :ets.insert(state.tables.sandboxes, {sandbox_id, SandboxState.to_info(stopping_state)})
 
         # Perform comprehensive cleanup
         cleanup_result = perform_comprehensive_cleanup(sandbox_state, monitor_ref, state)
@@ -268,7 +270,7 @@ defmodule Sandbox.Manager do
 
         # Update status to stopping for restart
         stopping_state = SandboxState.update_status(sandbox_state, :stopping)
-        :ets.insert(:sandboxes, {sandbox_id, SandboxState.to_info(stopping_state)})
+        :ets.insert(state.tables.sandboxes, {sandbox_id, SandboxState.to_info(stopping_state)})
 
         # Perform graceful shutdown with state preservation attempt
         case perform_graceful_restart(sandbox_state, monitor_ref, state) do
@@ -303,7 +305,10 @@ defmodule Sandbox.Manager do
         module = extract_module_from_beam(new_beam_data)
 
         # Perform hot reload
-        result = ModuleVersionManager.hot_swap_module(sandbox_id, module, new_beam_data)
+        result =
+          ModuleVersionManager.hot_swap_module(sandbox_id, module, new_beam_data,
+            server: state.services.module_version_manager
+          )
 
         case result do
           {:ok, :hot_swapped} ->
@@ -337,7 +342,7 @@ defmodule Sandbox.Manager do
 
   @impl true
   def handle_call({:get_sandbox_pid, sandbox_id}, _from, state) do
-    case :ets.lookup(:sandboxes, sandbox_id) do
+    case :ets.lookup(state.tables.sandboxes, sandbox_id) do
       [{^sandbox_id, sandbox_info}] ->
         {:reply, {:ok, sandbox_info.app_pid}, state}
 
@@ -1049,15 +1054,23 @@ defmodule Sandbox.Manager do
     sandbox_state = SandboxState.update_status(sandbox_state, :compiling)
 
     # Store initial state
-    :ets.insert(:sandboxes, {sandbox_id, SandboxState.to_info(sandbox_state)})
+    :ets.insert(state.tables.sandboxes, {sandbox_id, SandboxState.to_info(sandbox_state)})
     new_state = %{state | sandboxes: Map.put(state.sandboxes, sandbox_id, {sandbox_state, nil})}
 
     # Start sandbox application with comprehensive monitoring
-    case start_sandbox_application_with_monitoring(sandbox_state) do
+    case start_sandbox_application_with_monitoring(
+           sandbox_state,
+           state.services,
+           state.table_prefixes
+         ) do
       {:ok, updated_sandbox_state, monitor_ref} ->
         # Update state with process information
-        :ets.insert(:sandboxes, {sandbox_id, SandboxState.to_info(updated_sandbox_state)})
-        :ets.insert(:sandbox_monitors, {monitor_ref, sandbox_id})
+        :ets.insert(
+          state.tables.sandboxes,
+          {sandbox_id, SandboxState.to_info(updated_sandbox_state)}
+        )
+
+        :ets.insert(state.tables.sandbox_monitors, {monitor_ref, sandbox_id})
 
         final_state = %{
           new_state
@@ -1077,7 +1090,7 @@ defmodule Sandbox.Manager do
 
       {:error, reason} ->
         # Cleanup failed sandbox
-        :ets.delete(:sandboxes, sandbox_id)
+        :ets.delete(state.tables.sandboxes, sandbox_id)
         cleanup_state = Map.delete(new_state.sandboxes, sandbox_id)
 
         Logger.error("Failed to create sandbox",
@@ -1089,7 +1102,7 @@ defmodule Sandbox.Manager do
     end
   end
 
-  defp start_sandbox_application_with_monitoring(sandbox_state) do
+  defp start_sandbox_application_with_monitoring(sandbox_state, services, table_prefixes) do
     %SandboxState{
       id: _sandbox_id,
       app_name: _app_name,
@@ -1103,23 +1116,23 @@ defmodule Sandbox.Manager do
     case isolation_mode do
       :process ->
         # Pure process isolation (Phase 2)
-        start_with_process_isolation(sandbox_state)
+        start_with_process_isolation(sandbox_state, services, table_prefixes)
 
       :module ->
         # Pure module transformation (Phase 1)
-        start_with_module_transformation(sandbox_state)
+        start_with_module_transformation(sandbox_state, services, table_prefixes)
 
       :hybrid ->
         # Combined approach (Phase 1 + Phase 2) - default
-        start_with_hybrid_isolation(sandbox_state)
+        start_with_hybrid_isolation(sandbox_state, services, table_prefixes)
 
       :ets ->
         # ETS-based virtual code tables (Phase 3)
-        start_with_ets_isolation(sandbox_state)
+        start_with_ets_isolation(sandbox_state, services, table_prefixes)
     end
   end
 
-  defp start_with_process_isolation(sandbox_state) do
+  defp start_with_process_isolation(sandbox_state, services, table_prefixes) do
     %SandboxState{
       id: sandbox_id,
       app_name: app_name,
@@ -1131,7 +1144,7 @@ defmodule Sandbox.Manager do
     case Map.get(config, :sandbox_path) do
       nil ->
         # No sandbox path, use pure process isolation without module compilation
-        create_pure_process_isolation(sandbox_state)
+        create_pure_process_isolation(sandbox_state, services)
 
       _sandbox_path ->
         # Apply module transformation first, then process isolation
@@ -1139,7 +1152,9 @@ defmodule Sandbox.Manager do
                sandbox_id,
                app_name,
                supervisor_module,
-               Map.to_list(config)
+               Map.to_list(config),
+               services,
+               table_prefixes
              ) do
           {:ok, app_pid, supervisor_pid, full_opts} ->
             # Also create isolated process context for additional isolation
@@ -1154,7 +1169,7 @@ defmodule Sandbox.Manager do
               ProcessIsolator.create_isolated_context(
                 "#{sandbox_id}_process_wrapper",
                 supervisor_module,
-                isolation_opts
+                Keyword.put(isolation_opts, :server, services.process_isolator)
               )
 
             # Set up comprehensive process monitoring
@@ -1196,7 +1211,7 @@ defmodule Sandbox.Manager do
     end
   end
 
-  defp create_pure_process_isolation(sandbox_state) do
+  defp create_pure_process_isolation(sandbox_state, services) do
     %SandboxState{
       id: sandbox_id,
       supervisor_module: supervisor_module,
@@ -1210,7 +1225,11 @@ defmodule Sandbox.Manager do
       resource_limits: Map.get(config, :resource_limits, %{})
     ]
 
-    case ProcessIsolator.create_isolated_context(sandbox_id, supervisor_module, isolation_opts) do
+    case ProcessIsolator.create_isolated_context(
+           sandbox_id,
+           supervisor_module,
+           Keyword.put(isolation_opts, :server, services.process_isolator)
+         ) do
       {:ok, context} ->
         # Monitor the isolated process
         monitor_ref = Process.monitor(context.isolated_pid)
@@ -1231,7 +1250,7 @@ defmodule Sandbox.Manager do
     end
   end
 
-  defp start_with_module_transformation(sandbox_state) do
+  defp start_with_module_transformation(sandbox_state, services, table_prefixes) do
     %SandboxState{
       id: sandbox_id,
       app_name: app_name,
@@ -1240,7 +1259,14 @@ defmodule Sandbox.Manager do
     } = sandbox_state
 
     # Start sandbox application with module transformation (existing logic)
-    case start_sandbox_application(sandbox_id, app_name, supervisor_module, Map.to_list(config)) do
+    case start_sandbox_application(
+           sandbox_id,
+           app_name,
+           supervisor_module,
+           Map.to_list(config),
+           services,
+           table_prefixes
+         ) do
       {:ok, app_pid, supervisor_pid, full_opts} ->
         # Set up comprehensive process monitoring
         monitor_ref = Process.monitor(supervisor_pid)
@@ -1274,7 +1300,7 @@ defmodule Sandbox.Manager do
     end
   end
 
-  defp start_with_hybrid_isolation(sandbox_state) do
+  defp start_with_hybrid_isolation(sandbox_state, services, table_prefixes) do
     %SandboxState{
       id: sandbox_id,
       app_name: app_name,
@@ -1283,7 +1309,14 @@ defmodule Sandbox.Manager do
     } = sandbox_state
 
     # First apply module transformation, then process isolation
-    case start_sandbox_application(sandbox_id, app_name, supervisor_module, Map.to_list(config)) do
+    case start_sandbox_application(
+           sandbox_id,
+           app_name,
+           supervisor_module,
+           Map.to_list(config),
+           services,
+           table_prefixes
+         ) do
       {:ok, app_pid, supervisor_pid, full_opts} ->
         # Also create process isolation context for additional isolation
         isolation_opts = [
@@ -1298,7 +1331,7 @@ defmodule Sandbox.Manager do
           ProcessIsolator.create_isolated_context(
             "#{sandbox_id}_process_wrapper",
             supervisor_module,
-            isolation_opts
+            Keyword.put(isolation_opts, :server, services.process_isolator)
           )
 
         # Set up comprehensive process monitoring
@@ -1340,7 +1373,7 @@ defmodule Sandbox.Manager do
     end
   end
 
-  defp start_with_ets_isolation(sandbox_state) do
+  defp start_with_ets_isolation(sandbox_state, services, table_prefixes) do
     %SandboxState{
       id: sandbox_id,
       app_name: app_name,
@@ -1352,11 +1385,11 @@ defmodule Sandbox.Manager do
     case Map.get(config, :sandbox_path) do
       nil ->
         # No sandbox path, create ETS table and start supervisor directly
-        create_pure_ets_isolation(sandbox_state)
+        create_pure_ets_isolation(sandbox_state, table_prefixes)
 
       _sandbox_path ->
         # Apply module transformation, compile to ETS table, then start supervisor
-        case create_ets_virtual_code_table(sandbox_state) do
+        case create_ets_virtual_code_table(sandbox_state, table_prefixes) do
           {:ok, table_ref, updated_state} ->
             # Start sandbox application with ETS-based module loading
             case start_sandbox_application_with_ets(
@@ -1364,7 +1397,9 @@ defmodule Sandbox.Manager do
                    app_name,
                    supervisor_module,
                    Map.to_list(config),
-                   table_ref
+                   table_ref,
+                   services,
+                   table_prefixes
                  ) do
               {:ok, app_pid, supervisor_pid, full_opts} ->
                 # Set up monitoring
@@ -1395,7 +1430,10 @@ defmodule Sandbox.Manager do
 
               {:error, reason} ->
                 # Cleanup ETS table on failure
-                VirtualCodeTable.destroy_table(sandbox_id)
+                VirtualCodeTable.destroy_table(sandbox_id,
+                  table_prefix: table_prefixes.virtual_code
+                )
+
                 SandboxState.update_status(sandbox_state, :error)
                 {:error, {:ets_isolation_failed, reason}}
             end
@@ -1407,7 +1445,7 @@ defmodule Sandbox.Manager do
     end
   end
 
-  defp create_pure_ets_isolation(sandbox_state) do
+  defp create_pure_ets_isolation(sandbox_state, table_prefixes) do
     %SandboxState{
       id: sandbox_id,
       supervisor_module: supervisor_module,
@@ -1415,7 +1453,7 @@ defmodule Sandbox.Manager do
     } = sandbox_state
 
     # Create ETS table without module compilation
-    case VirtualCodeTable.create_table(sandbox_id) do
+    case VirtualCodeTable.create_table(sandbox_id, table_prefix: table_prefixes.virtual_code) do
       {:ok, table_ref} ->
         # Start supervisor directly
         case supervisor_module.start_link([]) do
@@ -1432,7 +1470,7 @@ defmodule Sandbox.Manager do
             {:ok, updated_state, monitor_ref}
 
           {:error, reason} ->
-            VirtualCodeTable.destroy_table(sandbox_id)
+            VirtualCodeTable.destroy_table(sandbox_id, table_prefix: table_prefixes.virtual_code)
             SandboxState.update_status(sandbox_state, :error)
             {:error, {:supervisor_start_failed, reason}}
         end
@@ -1443,14 +1481,14 @@ defmodule Sandbox.Manager do
     end
   end
 
-  defp create_ets_virtual_code_table(sandbox_state) do
+  defp create_ets_virtual_code_table(sandbox_state, table_prefixes) do
     %SandboxState{
       id: sandbox_id,
       config: _config
     } = sandbox_state
 
     # Create ETS table for virtual code storage
-    case VirtualCodeTable.create_table(sandbox_id) do
+    case VirtualCodeTable.create_table(sandbox_id, table_prefix: table_prefixes.virtual_code) do
       {:ok, table_ref} ->
         Logger.info("Created virtual code table for sandbox #{sandbox_id}",
           table_ref: table_ref
@@ -1473,11 +1511,20 @@ defmodule Sandbox.Manager do
          app_name,
          supervisor_module,
          opts,
-         table_ref
+         table_ref,
+         services,
+         table_prefixes
        ) do
     # This would be similar to start_sandbox_application but with ETS integration
     # For now, fall back to standard compilation with ETS storage
-    case start_sandbox_application(sandbox_id, app_name, supervisor_module, opts) do
+    case start_sandbox_application(
+           sandbox_id,
+           app_name,
+           supervisor_module,
+           opts,
+           services,
+           table_prefixes
+         ) do
       {:ok, _app_pid, _supervisor_pid, _full_opts} = success ->
         # TODO: Load compiled modules into ETS table
         # This is where we'd integrate the compiled BEAM files into the virtual code table
@@ -1507,7 +1554,13 @@ defmodule Sandbox.Manager do
     cleanup_errors = cleanup_monitoring(monitor_ref, sandbox_id, state, cleanup_errors)
 
     # 2. Clean up module versions
-    cleanup_errors = cleanup_module_versions(sandbox_id, cleanup_errors)
+    cleanup_errors =
+      cleanup_module_versions(
+        sandbox_id,
+        state.services,
+        state.table_prefixes,
+        cleanup_errors
+      )
 
     # 3. Terminate processes gracefully
     cleanup_errors = cleanup_processes(supervisor_pid, cleanup_errors)
@@ -1519,7 +1572,14 @@ defmodule Sandbox.Manager do
     cleanup_errors = cleanup_compilation_artifacts(artifacts, cleanup_errors)
 
     # 6. Remove from ETS tables
-    cleanup_errors = cleanup_ets_entries(sandbox_id, monitor_ref, cleanup_errors)
+    cleanup_errors =
+      cleanup_ets_entries(
+        sandbox_id,
+        monitor_ref,
+        state.tables,
+        state.table_prefixes,
+        cleanup_errors
+      )
 
     # 7. Update state
     updated_state = %{
@@ -1552,30 +1612,39 @@ defmodule Sandbox.Manager do
     end
   end
 
-  defp cleanup_module_versions(sandbox_id, errors) do
+  defp cleanup_module_versions(sandbox_id, services, table_prefixes, errors) do
     try do
       # Clean up module version manager
-      case GenServer.whereis(Sandbox.ModuleVersionManager) do
+      case GenServer.whereis(services.module_version_manager) do
         nil ->
           Logger.debug("ModuleVersionManager not running, skipping module cleanup")
 
         _pid ->
-          ModuleVersionManager.cleanup_sandbox_modules(sandbox_id)
+          ModuleVersionManager.cleanup_sandbox_modules(sandbox_id,
+            server: services.module_version_manager
+          )
       end
 
       # Clean up module transformation registry
-      ModuleTransformer.destroy_module_registry(sandbox_id)
+      ModuleTransformer.destroy_module_registry(sandbox_id,
+        table_prefix: table_prefixes.module_registry
+      )
 
       # Clean up process isolation context
-      case GenServer.whereis(Sandbox.ProcessIsolator) do
+      case GenServer.whereis(services.process_isolator) do
         nil ->
           Logger.debug("ProcessIsolator not running, skipping process isolation cleanup")
 
         _pid ->
           # Clean up main context
-          ProcessIsolator.destroy_isolated_context(sandbox_id)
+          ProcessIsolator.destroy_isolated_context(sandbox_id,
+            server: services.process_isolator
+          )
+
           # Clean up hybrid wrapper context if it exists
-          ProcessIsolator.destroy_isolated_context("#{sandbox_id}_process_wrapper")
+          ProcessIsolator.destroy_isolated_context("#{sandbox_id}_process_wrapper",
+            server: services.process_isolator
+          )
       end
 
       errors
@@ -1644,16 +1713,16 @@ defmodule Sandbox.Manager do
     end
   end
 
-  defp cleanup_ets_entries(sandbox_id, monitor_ref, errors) do
+  defp cleanup_ets_entries(sandbox_id, monitor_ref, tables, table_prefixes, errors) do
     try do
-      :ets.delete(:sandboxes, sandbox_id)
+      :ets.delete(tables.sandboxes, sandbox_id)
 
       if monitor_ref do
-        :ets.delete(:sandbox_monitors, monitor_ref)
+        :ets.delete(tables.sandbox_monitors, monitor_ref)
       end
 
       # Cleanup virtual code table if it exists
-      case VirtualCodeTable.destroy_table(sandbox_id) do
+      case VirtualCodeTable.destroy_table(sandbox_id, table_prefix: table_prefixes.virtual_code) do
         :ok ->
           Logger.debug("Cleaned up virtual code table for sandbox #{sandbox_id}")
 
@@ -1746,7 +1815,11 @@ defmodule Sandbox.Manager do
           )
 
           # 5. Start new application with preserved state
-          case start_sandbox_application_with_monitoring(restarting_state) do
+          case start_sandbox_application_with_monitoring(
+                 restarting_state,
+                 state.services,
+                 state.table_prefixes
+               ) do
             {:ok, new_sandbox_state, new_monitor_ref} ->
               Logger.debug("New application started successfully",
                 sandbox_id: sandbox_id,
@@ -1757,8 +1830,8 @@ defmodule Sandbox.Manager do
               final_state = restore_preserved_state(new_sandbox_state, preserved_state)
 
               # 7. Update ETS and state
-              :ets.insert(:sandboxes, {sandbox_id, SandboxState.to_info(final_state)})
-              :ets.insert(:sandbox_monitors, {new_monitor_ref, sandbox_id})
+              :ets.insert(state.tables.sandboxes, {sandbox_id, SandboxState.to_info(final_state)})
+              :ets.insert(state.tables.sandbox_monitors, {new_monitor_ref, sandbox_id})
 
               updated_state = %{
                 state
@@ -1783,7 +1856,7 @@ defmodule Sandbox.Manager do
                   monitors: Map.delete(state.monitors, monitor_ref)
               }
 
-              :ets.delete(:sandboxes, sandbox_id)
+              :ets.delete(state.tables.sandboxes, sandbox_id)
 
               {:error, {:restart_failed, reason}, cleanup_state}
           end
@@ -1803,7 +1876,7 @@ defmodule Sandbox.Manager do
             monitors: Map.delete(state.monitors, monitor_ref)
         }
 
-        :ets.delete(:sandboxes, sandbox_id)
+        :ets.delete(state.tables.sandboxes, sandbox_id)
 
         {:error, {:restart_exception, error}, cleanup_state}
     end
@@ -1893,7 +1966,7 @@ defmodule Sandbox.Manager do
 
         # Update sandbox status to error
         error_state = SandboxState.update_status(sandbox_state, :error)
-        :ets.insert(:sandboxes, {sandbox_id, SandboxState.to_info(error_state)})
+        :ets.insert(state.tables.sandboxes, {sandbox_id, SandboxState.to_info(error_state)})
 
         # Perform comprehensive crash cleanup with resource recovery
         case perform_crash_cleanup_with_recovery(sandbox_state, monitor_ref, reason, state) do
@@ -2032,7 +2105,13 @@ defmodule Sandbox.Manager do
     uptime =
       case sandbox_state.status do
         :running ->
-          DateTime.diff(DateTime.utc_now(), sandbox_state.created_at, :millisecond)
+          case sandbox_state.started_at_monotonic_ms do
+            start_ms when is_integer(start_ms) ->
+              max(System.monotonic_time(:millisecond) - start_ms, 0)
+
+            _ ->
+              DateTime.diff(DateTime.utc_now(), sandbox_state.created_at, :millisecond)
+          end
 
         _ ->
           sandbox_state.resource_usage.uptime
@@ -2114,7 +2193,14 @@ defmodule Sandbox.Manager do
     end
   end
 
-  defp start_sandbox_application(sandbox_id, app_name, supervisor_module, opts) do
+  defp start_sandbox_application(
+         sandbox_id,
+         app_name,
+         supervisor_module,
+         opts,
+         services,
+         table_prefixes
+       ) do
     # Get sandbox path from options or use default
     original_sandbox_path = Keyword.get(opts, :sandbox_path, default_sandbox_path(app_name))
 
@@ -2123,11 +2209,12 @@ defmodule Sandbox.Manager do
            prepare_unique_sandbox_directory(sandbox_id, original_sandbox_path),
          # Compile sandbox application in isolation
          {:ok, compile_info} <-
-           compile_sandbox_isolated(sandbox_id, sandbox_path, app_name, opts),
+           compile_sandbox_isolated(sandbox_id, sandbox_path, app_name, opts, table_prefixes),
          # Create the virtual code table to ensure it exists before loading modules
-         {:ok, _table_ref} <- VirtualCodeTable.create_table(sandbox_id),
+         {:ok, _table_ref} <-
+           VirtualCodeTable.create_table(sandbox_id, table_prefix: table_prefixes.virtual_code),
          :ok <- setup_code_paths(sandbox_id, compile_info),
-         :ok <- load_sandbox_modules(sandbox_id, compile_info),
+         :ok <- load_sandbox_modules(sandbox_id, compile_info, services, table_prefixes),
          :ok <- load_sandbox_application(app_name, sandbox_id, compile_info.app_file),
          {:ok, app_pid, supervisor_pid} <-
            start_application_and_supervisor(sandbox_id, app_name, supervisor_module, opts) do
@@ -2265,9 +2352,9 @@ defmodule Sandbox.Manager do
     :ok
   end
 
-  defp compile_sandbox_isolated(sandbox_id, sandbox_path, app_name, opts) do
+  defp compile_sandbox_isolated(sandbox_id, sandbox_path, app_name, opts, table_prefixes) do
     # Step 1: Apply module transformation to source files
-    case apply_module_transformation(sandbox_id, sandbox_path) do
+    case apply_module_transformation(sandbox_id, sandbox_path, table_prefixes) do
       {:ok, transformation_info} ->
         compile_opts = [
           timeout: Keyword.get(opts, :compile_timeout, 30_000),
@@ -2321,9 +2408,11 @@ defmodule Sandbox.Manager do
     end
   end
 
-  defp apply_module_transformation(sandbox_id, sandbox_path) do
+  defp apply_module_transformation(sandbox_id, sandbox_path, table_prefixes) do
     # Create module registry for this sandbox
-    ModuleTransformer.create_module_registry(sandbox_id)
+    ModuleTransformer.create_module_registry(sandbox_id,
+      table_prefix: table_prefixes.module_registry
+    )
 
     try do
       # Find all .ex files in the sandbox
@@ -2344,7 +2433,7 @@ defmodule Sandbox.Manager do
       # Transform each file
       result =
         Enum.reduce_while(ex_files, {:ok, transformation_info}, fn file_path, {:ok, acc_info} ->
-          case transform_source_file(sandbox_id, file_path) do
+          case transform_source_file(sandbox_id, file_path, table_prefixes) do
             {:ok, file_mappings} ->
               updated_info = %{
                 acc_info
@@ -2370,17 +2459,23 @@ defmodule Sandbox.Manager do
 
         {:error, _} = error ->
           # Clean up partial transformation
-          ModuleTransformer.destroy_module_registry(sandbox_id)
+          ModuleTransformer.destroy_module_registry(sandbox_id,
+            table_prefix: table_prefixes.module_registry
+          )
+
           error
       end
     rescue
       error ->
-        ModuleTransformer.destroy_module_registry(sandbox_id)
+        ModuleTransformer.destroy_module_registry(sandbox_id,
+          table_prefix: table_prefixes.module_registry
+        )
+
         {:error, {:transformation_exception, error}}
     end
   end
 
-  defp transform_source_file(sandbox_id, file_path) do
+  defp transform_source_file(sandbox_id, file_path, table_prefixes) do
     try do
       # Read the source file
       case File.read(file_path) do
@@ -2393,7 +2488,9 @@ defmodule Sandbox.Manager do
                 :ok ->
                   # Register module mappings
                   Enum.each(module_mappings, fn {original, transformed} ->
-                    ModuleTransformer.register_module_mapping(sandbox_id, original, transformed)
+                    ModuleTransformer.register_module_mapping(sandbox_id, original, transformed,
+                      table_prefix: table_prefixes.module_registry
+                    )
                   end)
 
                   {:ok, module_mappings}
@@ -2415,17 +2512,17 @@ defmodule Sandbox.Manager do
     end
   end
 
-  defp load_sandbox_modules(sandbox_id, compile_info) do
+  defp load_sandbox_modules(sandbox_id, compile_info, services, table_prefixes) do
     compile_info.beam_files
     |> Enum.reduce_while(:ok, fn beam_file, :ok ->
-      case load_beam_file(sandbox_id, beam_file) do
+      case load_beam_file(sandbox_id, beam_file, services, table_prefixes) do
         :ok -> {:cont, :ok}
         {:error, reason} -> {:halt, {:error, reason}}
       end
     end)
   end
 
-  defp load_beam_file(sandbox_id, beam_file) do
+  defp load_beam_file(sandbox_id, beam_file, services, table_prefixes) do
     try do
       beam_data = File.read!(beam_file)
       module = extract_module_from_beam(beam_data)
@@ -2436,10 +2533,14 @@ defmodule Sandbox.Manager do
 
       # Load the module into the sandbox-specific VirtualCodeTable (ETS)
       # This avoids polluting the global code path.
-      case VirtualCodeTable.load_module(sandbox_id, module, beam_data) do
+      case VirtualCodeTable.load_module(sandbox_id, module, beam_data,
+             table_prefix: table_prefixes.virtual_code
+           ) do
         :ok ->
           # Also register with the version manager for hot-reload capabilities
-          case ModuleVersionManager.register_module_version(sandbox_id, module, beam_data) do
+          case ModuleVersionManager.register_module_version(sandbox_id, module, beam_data,
+                 server: services.module_version_manager
+               ) do
             {:ok, version} ->
               Logger.debug("Loaded module #{module} version #{version} for sandbox #{sandbox_id}")
               :ok
@@ -2486,6 +2587,28 @@ defmodule Sandbox.Manager do
       {:error, :beam_lib, _reason} ->
         nil
     end
+  end
+
+  defp ensure_table(table_name, opts) do
+    case :ets.whereis(table_name) do
+      :undefined ->
+        try do
+          :ets.new(table_name, opts)
+          Logger.info("Created ETS table #{table_name}")
+        catch
+          :error, :badarg ->
+            Logger.debug("ETS table #{table_name} was created concurrently")
+        end
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp split_server_opts(opts) do
+    server = Keyword.get(opts, :server, __MODULE__)
+    call_opts = Keyword.delete(opts, :server)
+    {server, call_opts}
   end
 
   # Additional helper functions for comprehensive monitoring

@@ -1,5 +1,5 @@
 defmodule SandboxIntegrationTest do
-  use Sandbox.SerialCase
+  use Sandbox.TestCase
 
   describe "basic sandbox structure" do
     test "application starts with all components" do

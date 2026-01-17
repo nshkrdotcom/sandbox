@@ -1,11 +1,11 @@
 defmodule Sandbox.ProcessIsolationDemoTest do
-  use Sandbox.SerialCase
+  use Sandbox.ManagerCase
 
   alias Sandbox.Manager
 
   @moduletag :integration
 
-  test "demonstrates process isolation capabilities" do
+  test "demonstrates process isolation capabilities", %{manager: manager} do
     test_dir = create_temp_dir("process_isolation_demo")
     on_exit(fn -> File.rm_rf!(test_dir) end)
     write_mix_project(test_dir, "ProcessIsolationDemo", :process_isolation_demo)
@@ -51,11 +51,12 @@ defmodule Sandbox.ProcessIsolationDemoTest do
                  ProcessIsolationTestSupervisor,
                  sandbox_path: test_dir,
                  isolation_mode: mode,
-                 isolation_level: :medium
+                 isolation_level: :medium,
+                 server: manager
                )
 
       assert sandbox_info.status == :running
-      assert :ok = Manager.destroy_sandbox(sandbox_id)
+      assert :ok = Manager.destroy_sandbox(sandbox_id, server: manager)
     end)
   end
 end

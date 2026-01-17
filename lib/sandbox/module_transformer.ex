@@ -11,6 +11,8 @@ defmodule Sandbox.ModuleTransformer do
 
   require Logger
 
+  alias Sandbox.Config
+
   @doc """
   Transforms Elixir source code to use sandbox-specific module names.
 
@@ -121,8 +123,8 @@ defmodule Sandbox.ModuleTransformer do
   ## Returns
   - ETS table reference for the mapping registry
   """
-  def create_module_registry(sandbox_id) do
-    table_name = :"sandbox_modules_#{sandbox_id}"
+  def create_module_registry(sandbox_id, opts \\ []) do
+    table_name = module_registry_table_name(sandbox_id, opts)
 
     case :ets.whereis(table_name) do
       :undefined ->
@@ -143,8 +145,8 @@ defmodule Sandbox.ModuleTransformer do
   - `original_name`: Original module name
   - `transformed_name`: Transformed module name
   """
-  def register_module_mapping(sandbox_id, original_name, transformed_name) do
-    table_name = :"sandbox_modules_#{sandbox_id}"
+  def register_module_mapping(sandbox_id, original_name, transformed_name, opts \\ []) do
+    table_name = module_registry_table_name(sandbox_id, opts)
 
     # Store both directions of the mapping
     :ets.insert(table_name, {original_name, transformed_name})
@@ -164,8 +166,8 @@ defmodule Sandbox.ModuleTransformer do
   - `{:ok, mapped_name}` if mapping exists
   - `:not_found` if no mapping exists
   """
-  def lookup_module_mapping(sandbox_id, module_name) do
-    table_name = :"sandbox_modules_#{sandbox_id}"
+  def lookup_module_mapping(sandbox_id, module_name, opts \\ []) do
+    table_name = module_registry_table_name(sandbox_id, opts)
 
     try do
       case :ets.lookup(table_name, module_name) do
@@ -185,8 +187,8 @@ defmodule Sandbox.ModuleTransformer do
   ## Parameters
   - `sandbox_id`: Unique identifier for the sandbox
   """
-  def destroy_module_registry(sandbox_id) do
-    table_name = :"sandbox_modules_#{sandbox_id}"
+  def destroy_module_registry(sandbox_id, opts \\ []) do
+    table_name = module_registry_table_name(sandbox_id, opts)
 
     case :ets.whereis(table_name) do
       :undefined ->
@@ -428,5 +430,15 @@ defmodule Sandbox.ModuleTransformer do
     unique_suffix = :erlang.phash2({timestamp, unique_id, self()}) |> abs()
 
     "Sandbox_#{sanitized_id}_#{unique_suffix}"
+  end
+
+  defp module_registry_table_name(sandbox_id, opts) do
+    prefix =
+      case Keyword.get(opts, :table_prefix) do
+        nil -> Config.table_prefix(:module_registry, opts)
+        value -> value
+      end
+
+    :"#{to_string(prefix)}_#{sandbox_id}"
   end
 end

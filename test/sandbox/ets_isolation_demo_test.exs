@@ -1,11 +1,11 @@
 defmodule Sandbox.EtsIsolationDemoTest do
-  use Sandbox.SerialCase
+  use Sandbox.ManagerCase
 
   alias Sandbox.Manager
 
   @moduletag :integration
 
-  test "demonstrates ETS-based isolation capabilities (Phase 3)" do
+  test "demonstrates ETS-based isolation capabilities (Phase 3)", %{manager: manager} do
     test_dir = create_temp_dir("ets_isolation_demo")
     on_exit(fn -> File.rm_rf!(test_dir) end)
     write_mix_project(test_dir, "EtsIsolationDemo", :ets_isolation_demo)
@@ -45,14 +45,15 @@ defmodule Sandbox.EtsIsolationDemoTest do
                EtsIsolationTestSupervisor,
                sandbox_path: test_dir,
                isolation_mode: :ets,
-               isolation_level: :medium
+               isolation_level: :medium,
+               server: manager
              )
 
     assert sandbox_info.status == :running
-    assert :ok = Manager.destroy_sandbox(sandbox_id)
+    assert :ok = Manager.destroy_sandbox(sandbox_id, server: manager)
   end
 
-  test "demonstrates all isolation modes working together" do
+  test "demonstrates all isolation modes working together", %{manager: manager} do
     test_dir = create_temp_dir("all_isolation_demo")
     on_exit(fn -> File.rm_rf!(test_dir) end)
     write_mix_project(test_dir, "AllIsolationDemo", :all_isolation_demo)
@@ -95,11 +96,12 @@ defmodule Sandbox.EtsIsolationDemoTest do
                  AllIsolationTestSupervisor,
                  sandbox_path: test_dir,
                  isolation_mode: mode,
-                 isolation_level: :medium
+                 isolation_level: :medium,
+                 server: manager
                )
 
       assert sandbox_info.status == :running
-      assert :ok = Manager.destroy_sandbox(sandbox_id)
+      assert :ok = Manager.destroy_sandbox(sandbox_id, server: manager)
     end)
   end
 end

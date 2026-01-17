@@ -6,6 +6,117 @@ defmodule Sandbox.TestHelpers do
     "#{prefix}-#{suffix}"
   end
 
+  def unique_atom(prefix) when is_binary(prefix) do
+    String.to_atom("#{prefix}_#{System.unique_integer([:positive])}")
+  end
+
+  def unique_atoms(prefix, keys) when is_binary(prefix) and is_list(keys) do
+    Enum.reduce(keys, %{}, fn key, acc ->
+      Map.put(acc, key, unique_atom("#{prefix}_#{key}"))
+    end)
+  end
+
+  def unique_prefixes(prefix, keys) when is_binary(prefix) and is_list(keys) do
+    Enum.reduce(keys, %{}, fn key, acc ->
+      Map.put(acc, key, "#{prefix}_#{key}_#{System.unique_integer([:positive])}")
+    end)
+  end
+
+  def start_isolated_services(opts \\ []) do
+    table_names =
+      Keyword.get(
+        opts,
+        :table_names,
+        unique_atoms("sandbox_tables", [
+          :sandboxes,
+          :sandbox_monitors,
+          :module_versions,
+          :isolation_contexts
+        ])
+      )
+
+    service_names =
+      Keyword.get(
+        opts,
+        :services,
+        unique_atoms("sandbox_services", [
+          :manager,
+          :module_version_manager,
+          :process_isolator
+        ])
+      )
+
+    table_prefixes =
+      Keyword.get(
+        opts,
+        :table_prefixes,
+        unique_prefixes("sandbox_prefix", [:module_registry, :virtual_code])
+      )
+
+    # Ensure tables are cleaned up after processes stop.
+    Supertester.OTPHelpers.cleanup_on_exit(fn ->
+      [
+        table_names.sandboxes,
+        table_names.sandbox_monitors,
+        table_names.module_versions,
+        table_names.isolation_contexts
+      ]
+      |> Enum.each(fn table ->
+        if :ets.whereis(table) != :undefined do
+          :ets.delete(table)
+        end
+      end)
+    end)
+
+    {:ok, mvm_pid} =
+      Supertester.OTPHelpers.setup_isolated_genserver(
+        Sandbox.ModuleVersionManager,
+        "module_version_manager",
+        init_args: [table_name: table_names.module_versions],
+        name: service_names.module_version_manager
+      )
+
+    Process.unlink(mvm_pid)
+
+    {:ok, isolator_pid} =
+      Supertester.OTPHelpers.setup_isolated_genserver(
+        Sandbox.ProcessIsolator,
+        "process_isolator",
+        init_args: [table_name: table_names.isolation_contexts],
+        name: service_names.process_isolator
+      )
+
+    Process.unlink(isolator_pid)
+
+    {:ok, manager_pid} =
+      Supertester.OTPHelpers.setup_isolated_genserver(
+        Sandbox.Manager,
+        "manager",
+        init_args: [
+          table_names: %{
+            sandboxes: table_names.sandboxes,
+            sandbox_monitors: table_names.sandbox_monitors
+          },
+          services: %{
+            module_version_manager: service_names.module_version_manager,
+            process_isolator: service_names.process_isolator
+          },
+          table_prefixes: table_prefixes
+        ],
+        name: service_names.manager
+      )
+
+    Process.unlink(manager_pid)
+
+    {:ok,
+     %{
+       manager: service_names.manager,
+       services: service_names,
+       tables: table_names,
+       table_prefixes: table_prefixes
+     }}
+  end
+
   def fixture_path do
     Path.expand("../fixtures/simple_sandbox", __DIR__)
   end

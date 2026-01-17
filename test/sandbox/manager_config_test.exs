@@ -1,5 +1,5 @@
 defmodule Sandbox.ManagerConfigTest do
-  use Sandbox.SerialCase
+  use Sandbox.ManagerCase
 
   require Logger
   alias Sandbox.Manager
@@ -7,7 +7,7 @@ defmodule Sandbox.ManagerConfigTest do
   @moduletag :capture_log
 
   describe "configuration validation" do
-    test "validates supervisor module exists" do
+    test "validates supervisor module exists", %{manager: manager} do
       sandbox_id = unique_id("test-invalid-supervisor")
 
       # Test with non-existent module
@@ -15,7 +15,8 @@ defmodule Sandbox.ManagerConfigTest do
         Manager.create_sandbox(
           sandbox_id,
           NonExistentSupervisor,
-          sandbox_path: fixture_path()
+          sandbox_path: fixture_path(),
+          server: manager
         )
 
       assert {:error, {:validation_failed, errors}} = result
@@ -28,7 +29,7 @@ defmodule Sandbox.ManagerConfigTest do
              end)
     end
 
-    test "validates sandbox path exists" do
+    test "validates sandbox path exists", %{manager: manager} do
       defmodule ValidSupervisor do
         use Supervisor
 
@@ -49,7 +50,8 @@ defmodule Sandbox.ManagerConfigTest do
         Manager.create_sandbox(
           sandbox_id,
           ValidSupervisor,
-          sandbox_path: "/non/existent/path"
+          sandbox_path: "/non/existent/path",
+          server: manager
         )
 
       assert {:error, {:validation_failed, errors}} = result
@@ -65,7 +67,7 @@ defmodule Sandbox.ManagerConfigTest do
              end)
     end
 
-    test "validates resource limits format" do
+    test "validates resource limits format", %{manager: manager} do
       defmodule ValidSupervisor2 do
         use Supervisor
 
@@ -87,7 +89,8 @@ defmodule Sandbox.ManagerConfigTest do
           sandbox_id,
           ValidSupervisor2,
           sandbox_path: fixture_path(),
-          resource_limits: "invalid"
+          resource_limits: "invalid",
+          server: manager
         )
 
       assert {:error, {:validation_failed, errors}} = result
@@ -103,7 +106,7 @@ defmodule Sandbox.ManagerConfigTest do
              end)
     end
 
-    test "validates security profile" do
+    test "validates security profile", %{manager: manager} do
       defmodule ValidSupervisor3 do
         use Supervisor
 
@@ -125,7 +128,8 @@ defmodule Sandbox.ManagerConfigTest do
           sandbox_id,
           ValidSupervisor3,
           sandbox_path: fixture_path(),
-          security_profile: :invalid_profile
+          security_profile: :invalid_profile,
+          server: manager
         )
 
       assert {:error, {:validation_failed, errors}} = result
@@ -141,7 +145,7 @@ defmodule Sandbox.ManagerConfigTest do
              end)
     end
 
-    test "accepts valid configuration with defaults" do
+    test "accepts valid configuration with defaults", %{manager: manager} do
       defmodule ValidSupervisor4 do
         use Supervisor
 
@@ -162,7 +166,8 @@ defmodule Sandbox.ManagerConfigTest do
         Manager.create_sandbox(
           sandbox_id,
           ValidSupervisor4,
-          sandbox_path: fixture_path()
+          sandbox_path: fixture_path(),
+          server: manager
         )
 
       # Should succeed or fail for reasons other than validation
@@ -170,7 +175,7 @@ defmodule Sandbox.ManagerConfigTest do
         {:ok, _sandbox_info} ->
           # Success - clean up
           try do
-            Manager.destroy_sandbox(sandbox_id)
+            Manager.destroy_sandbox(sandbox_id, server: manager)
           catch
             # Ignore cleanup failures for this test
             :exit, _ -> :ok
@@ -187,7 +192,7 @@ defmodule Sandbox.ManagerConfigTest do
       end
     end
 
-    test "accepts valid resource limits" do
+    test "accepts valid resource limits", %{manager: manager} do
       defmodule ValidSupervisor5 do
         use Supervisor
 
@@ -213,7 +218,8 @@ defmodule Sandbox.ManagerConfigTest do
             # 32MB
             max_memory: 32 * 1024 * 1024,
             max_processes: 50
-          }
+          },
+          server: manager
         )
 
       # Should succeed or fail for reasons other than validation
@@ -223,7 +229,7 @@ defmodule Sandbox.ManagerConfigTest do
           assert is_map(sandbox_info.resource_usage)
 
           try do
-            Manager.destroy_sandbox(sandbox_id)
+            Manager.destroy_sandbox(sandbox_id, server: manager)
           catch
             # Ignore cleanup failures for this test
             :exit, _ -> :ok
@@ -240,7 +246,7 @@ defmodule Sandbox.ManagerConfigTest do
       end
     end
 
-    test "accepts valid security profiles" do
+    test "accepts valid security profiles", %{manager: manager} do
       defmodule ValidSupervisor6 do
         use Supervisor
 
@@ -263,7 +269,8 @@ defmodule Sandbox.ManagerConfigTest do
             sandbox_id,
             ValidSupervisor6,
             sandbox_path: fixture_path(),
-            security_profile: profile
+            security_profile: profile,
+            server: manager
           )
 
         # Should succeed or fail for reasons other than validation
@@ -274,7 +281,7 @@ defmodule Sandbox.ManagerConfigTest do
             assert Map.has_key?(sandbox_info.security_profile, :isolation_level)
             # Note: The actual profile might be the default if not properly applied
             try do
-              Manager.destroy_sandbox(sandbox_id)
+              Manager.destroy_sandbox(sandbox_id, server: manager)
             catch
               # Ignore cleanup failures for this test
               :exit, _ -> :ok
@@ -294,7 +301,7 @@ defmodule Sandbox.ManagerConfigTest do
   end
 
   describe "enhanced configuration validation" do
-    test "validates sandbox directory structure" do
+    test "validates sandbox directory structure", %{manager: manager} do
       defmodule TestSupervisor1 do
         use Supervisor
 
@@ -308,7 +315,11 @@ defmodule Sandbox.ManagerConfigTest do
       temp_dir = create_temp_directory()
       sandbox_id = unique_id("test-no-mix")
 
-      result = Manager.create_sandbox(sandbox_id, TestSupervisor1, sandbox_path: temp_dir)
+      result =
+        Manager.create_sandbox(sandbox_id, TestSupervisor1,
+          sandbox_path: temp_dir,
+          server: manager
+        )
 
       assert {:error, {:validation_failed, errors}} = result
       assert_error_contains(errors, :sandbox_missing_mix_file)
@@ -317,7 +328,7 @@ defmodule Sandbox.ManagerConfigTest do
       File.rm_rf!(temp_dir)
     end
 
-    test "validates resource limit bounds" do
+    test "validates resource limit bounds", %{manager: manager} do
       defmodule TestSupervisor2 do
         use Supervisor
 
@@ -336,7 +347,8 @@ defmodule Sandbox.ManagerConfigTest do
           TestSupervisor2,
           sandbox_path: fixture_path(),
           # Less than 1MB
-          resource_limits: %{max_memory: 512}
+          resource_limits: %{max_memory: 512},
+          server: manager
         )
 
       assert {:error, {:validation_failed, [error]}} = result
@@ -344,7 +356,7 @@ defmodule Sandbox.ManagerConfigTest do
       assert_error_contains(errors, :max_memory_too_small)
     end
 
-    test "validates resource limit types" do
+    test "validates resource limit types", %{manager: manager} do
       defmodule TestSupervisor3 do
         use Supervisor
 
@@ -362,7 +374,8 @@ defmodule Sandbox.ManagerConfigTest do
           sandbox_id,
           TestSupervisor3,
           sandbox_path: fixture_path(),
-          resource_limits: %{max_memory: "invalid"}
+          resource_limits: %{max_memory: "invalid"},
+          server: manager
         )
 
       assert {:error, {:validation_failed, [error]}} = result
@@ -370,7 +383,7 @@ defmodule Sandbox.ManagerConfigTest do
       assert_error_contains(errors, :invalid_max_memory)
     end
 
-    test "validates custom security profiles" do
+    test "validates custom security profiles", %{manager: manager} do
       defmodule TestSupervisor4 do
         use Supervisor
 
@@ -395,7 +408,8 @@ defmodule Sandbox.ManagerConfigTest do
           sandbox_id,
           TestSupervisor4,
           sandbox_path: fixture_path(),
-          security_profile: custom_profile
+          security_profile: custom_profile,
+          server: manager
         )
 
       # Should succeed or fail for reasons other than validation
@@ -404,7 +418,7 @@ defmodule Sandbox.ManagerConfigTest do
           assert is_map(sandbox_info.security_profile)
 
           try do
-            Manager.destroy_sandbox(sandbox_id)
+            Manager.destroy_sandbox(sandbox_id, server: manager)
           catch
             :exit, _ -> :ok
           end
@@ -418,7 +432,7 @@ defmodule Sandbox.ManagerConfigTest do
       end
     end
 
-    test "rejects invalid custom security profiles" do
+    test "rejects invalid custom security profiles", %{manager: manager} do
       defmodule TestSupervisor5 do
         use Supervisor
 
@@ -441,7 +455,8 @@ defmodule Sandbox.ManagerConfigTest do
           sandbox_id,
           TestSupervisor5,
           sandbox_path: fixture_path(),
-          security_profile: invalid_profile
+          security_profile: invalid_profile,
+          server: manager
         )
 
       assert {:error, {:validation_failed, [error]}} = result
@@ -449,7 +464,7 @@ defmodule Sandbox.ManagerConfigTest do
       assert_error_contains(errors, :missing_security_profile_key)
     end
 
-    test "validates security profile consistency" do
+    test "validates security profile consistency", %{manager: manager} do
       defmodule TestSupervisor6 do
         use Supervisor
 
@@ -475,14 +490,15 @@ defmodule Sandbox.ManagerConfigTest do
           sandbox_id,
           TestSupervisor6,
           sandbox_path: fixture_path(),
-          security_profile: inconsistent_profile
+          security_profile: inconsistent_profile,
+          server: manager
         )
 
       assert {:error, {:validation_failed, [error]}} = result
       assert {:security_profile_inconsistent, _message} = error
     end
 
-    test "validates comprehensive configuration scenarios using Supertester" do
+    test "validates comprehensive configuration scenarios using Supertester", %{manager: manager} do
       defmodule TestSupervisor7 do
         use Supervisor
 
@@ -512,21 +528,26 @@ defmodule Sandbox.ManagerConfigTest do
         auto_reload: true
       ]
 
-      result = Manager.create_sandbox(sandbox_id, TestSupervisor7, comprehensive_config)
+      result =
+        Manager.create_sandbox(
+          sandbox_id,
+          TestSupervisor7,
+          comprehensive_config ++ [server: manager]
+        )
 
       case result do
         {:ok, _sandbox_info} ->
           # Use Supertester OTP helpers to wait for sandbox to be ready
-          wait_for_sandbox_ready(sandbox_id, 5000)
+          wait_for_sandbox_ready(manager, sandbox_id, 5000)
 
           # Verify configuration was applied
-          {:ok, final_info} = Manager.get_sandbox_info(sandbox_id)
+          {:ok, final_info} = Manager.get_sandbox_info(sandbox_id, server: manager)
           assert is_map(final_info.security_profile)
           assert final_info.security_profile.isolation_level == :high
 
           # Cleanup
           try do
-            Manager.destroy_sandbox(sandbox_id)
+            Manager.destroy_sandbox(sandbox_id, server: manager)
           catch
             :exit, _ -> :ok
           end
@@ -566,10 +587,10 @@ defmodule Sandbox.ManagerConfigTest do
     end
   end
 
-  defp wait_for_sandbox_ready(sandbox_id, timeout) do
+  defp wait_for_sandbox_ready(manager, sandbox_id, timeout) do
     await(
       fn ->
-        case Manager.get_sandbox_info(sandbox_id) do
+        case Manager.get_sandbox_info(sandbox_id, server: manager) do
           {:ok, info} when info.status in [:running, :compiling, :starting] ->
             true
 

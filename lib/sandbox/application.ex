@@ -13,33 +13,47 @@ defmodule Sandbox.Application do
 
   require Logger
 
+  alias Sandbox.Config
+
   @doc false
   def start(_type, _args) do
     Logger.info("Starting Sandbox application...")
 
     # Initialize ETS tables for sandbox registry
-    :ok = init_ets_tables()
+    table_names = Config.table_names()
+    service_names = Config.service_names()
+    table_prefixes = Config.table_prefixes()
+
+    :ok = init_ets_tables(table_names: table_names)
 
     # Emit telemetry event for application startup
     :telemetry.execute([:sandbox, :application, :start], %{}, %{})
 
     children = [
       # Core sandbox components
-      Sandbox.Manager,
-      Sandbox.ModuleVersionManager,
+      {Sandbox.Manager,
+       [
+         name: service_names.manager,
+         table_names: table_names,
+         table_prefixes: table_prefixes,
+         services: service_names
+       ]},
+      {Sandbox.ModuleVersionManager,
+       [name: service_names.module_version_manager, table_name: table_names.module_versions]},
 
       # Process isolation infrastructure (Phase 2)
-      Sandbox.ProcessIsolator,
+      {Sandbox.ProcessIsolator,
+       [name: service_names.process_isolator, table_name: table_names.isolation_contexts]},
 
       # Resource monitoring and security
-      {Sandbox.ResourceMonitor, []},
-      {Sandbox.SecurityController, []},
+      {Sandbox.ResourceMonitor, [name: service_names.resource_monitor]},
+      {Sandbox.SecurityController, [name: service_names.security_controller]},
 
       # File watching system
-      {Sandbox.FileWatcher, []},
+      {Sandbox.FileWatcher, [name: service_names.file_watcher]},
 
       # State preservation system
-      {Sandbox.StatePreservation, []}
+      {Sandbox.StatePreservation, [name: service_names.state_preservation]}
     ]
 
     opts = [strategy: :one_for_one, name: Sandbox.Supervisor]
@@ -47,7 +61,12 @@ defmodule Sandbox.Application do
     case Supervisor.start_link(children, opts) do
       {:ok, pid} ->
         Logger.info("Sandbox application started successfully")
-        {:ok, pid}
+
+        {:ok, pid,
+         %{
+           table_names: table_names,
+           cleanup_ets_on_stop: Config.cleanup_ets_on_stop?()
+         }}
 
       {:error, reason} ->
         Logger.error("Failed to start Sandbox application: #{inspect(reason)}")
@@ -56,11 +75,13 @@ defmodule Sandbox.Application do
   end
 
   @doc false
-  def stop(_state) do
+  def stop(state) do
     Logger.info("Stopping Sandbox application...")
 
-    # Cleanup ETS tables
-    cleanup_ets_tables()
+    # Cleanup ETS tables only if explicitly configured
+    if Config.cleanup_ets_on_stop?(state) do
+      cleanup_ets_tables(table_names: table_names_from_state(state))
+    end
 
     # Emit telemetry event for application stop
     :telemetry.execute([:sandbox, :application, :stop], %{}, %{})
@@ -79,9 +100,11 @@ defmodule Sandbox.Application do
 
   This function is idempotent and safe to call multiple times.
   """
-  def init_ets_tables do
+  def init_ets_tables(opts \\ []) do
+    table_names = Config.table_names(opts)
+
     tables = [
-      {:sandbox_registry,
+      {table_names.sandbox_registry,
        [
          :named_table,
          :public,
@@ -89,7 +112,7 @@ defmodule Sandbox.Application do
          {:read_concurrency, true},
          {:write_concurrency, true}
        ]},
-      {:sandbox_modules,
+      {table_names.sandbox_modules,
        [
          :named_table,
          :public,
@@ -97,7 +120,7 @@ defmodule Sandbox.Application do
          {:read_concurrency, true},
          {:write_concurrency, true}
        ]},
-      {:sandbox_resources,
+      {table_names.sandbox_resources,
        [
          :named_table,
          :public,
@@ -105,7 +128,7 @@ defmodule Sandbox.Application do
          {:read_concurrency, true},
          {:write_concurrency, true}
        ]},
-      {:sandbox_security,
+      {table_names.sandbox_security,
        [
          :named_table,
          :public,
@@ -140,8 +163,15 @@ defmodule Sandbox.Application do
   @doc """
   Cleans up ETS tables on application shutdown.
   """
-  def cleanup_ets_tables do
-    tables = [:sandbox_registry, :sandbox_modules, :sandbox_resources, :sandbox_security]
+  def cleanup_ets_tables(opts \\ []) do
+    table_names = Config.table_names(opts)
+
+    tables = [
+      table_names.sandbox_registry,
+      table_names.sandbox_modules,
+      table_names.sandbox_resources,
+      table_names.sandbox_security
+    ]
 
     Enum.each(tables, fn table ->
       if :ets.whereis(table) != :undefined do
@@ -158,8 +188,15 @@ defmodule Sandbox.Application do
 
   Returns a map with table names as keys and table info as values.
   """
-  def get_ets_info do
-    tables = [:sandbox_registry, :sandbox_modules, :sandbox_resources, :sandbox_security]
+  def get_ets_info(opts \\ []) do
+    table_names = Config.table_names(opts)
+
+    tables = [
+      table_names.sandbox_registry,
+      table_names.sandbox_modules,
+      table_names.sandbox_resources,
+      table_names.sandbox_security
+    ]
 
     Enum.into(tables, %{}, fn table ->
       if :ets.whereis(table) != :undefined do
@@ -184,4 +221,7 @@ defmodule Sandbox.Application do
       end
     end)
   end
+
+  defp table_names_from_state(%{table_names: table_names}), do: table_names
+  defp table_names_from_state(_state), do: Config.table_names()
 end

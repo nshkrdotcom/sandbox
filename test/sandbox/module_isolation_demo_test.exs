@@ -1,11 +1,11 @@
 defmodule Sandbox.ModuleIsolationDemoTest do
-  use Sandbox.SerialCase
+  use Sandbox.ManagerCase
 
   alias Sandbox.Manager
 
   @moduletag :integration
 
-  test "demonstrates reduced module conflicts with transformation" do
+  test "demonstrates reduced module conflicts with transformation", %{manager: manager} do
     test_dir = create_temp_dir("isolation_demo")
     on_exit(fn -> File.rm_rf!(test_dir) end)
     write_mix_project(test_dir, "IsolationDemo", :isolation_demo)
@@ -43,11 +43,12 @@ defmodule Sandbox.ModuleIsolationDemoTest do
                Manager.create_sandbox(
                  sandbox_id,
                  IsolationTestSupervisor,
-                 sandbox_path: test_dir
+                 sandbox_path: test_dir,
+                 server: manager
                )
 
       assert sandbox_info.status == :running
-      assert :ok = Manager.destroy_sandbox(sandbox_id)
+      assert :ok = Manager.destroy_sandbox(sandbox_id, server: manager)
     end)
   end
 end
