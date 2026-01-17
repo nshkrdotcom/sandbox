@@ -49,17 +49,9 @@ defmodule Sandbox.RuntimeInjectionTest do
       )
 
     on_exit(fn ->
-      if Process.alive?(manager_pid) do
-        GenServer.stop(manager_pid)
-      end
-
-      if Process.alive?(isolator_pid) do
-        GenServer.stop(isolator_pid)
-      end
-
-      if Process.alive?(mvm_pid) do
-        GenServer.stop(mvm_pid)
-      end
+      stop_genserver(manager_pid)
+      stop_genserver(isolator_pid)
+      stop_genserver(mvm_pid)
     end)
 
     assert :ets.whereis(table_names.sandboxes) != :undefined
@@ -93,11 +85,7 @@ defmodule Sandbox.RuntimeInjectionTest do
         }
       )
 
-    on_exit(fn ->
-      if Process.alive?(manager_pid) do
-        GenServer.stop(manager_pid)
-      end
-    end)
+    on_exit(fn -> stop_genserver(manager_pid) end)
 
     assert [{"persisted", _}] = :ets.lookup(table_names.sandboxes, "persisted")
     assert [{^monitor_ref, "persisted"}] = :ets.lookup(table_names.sandbox_monitors, monitor_ref)
@@ -110,11 +98,7 @@ defmodule Sandbox.RuntimeInjectionTest do
     {:ok, pid} = ModuleVersionManager.start_link(name: manager_name, table_name: table_name)
     Process.unlink(pid)
 
-    on_exit(fn ->
-      if Process.alive?(pid) do
-        GenServer.stop(pid)
-      end
-    end)
+    on_exit(fn -> stop_genserver(pid) end)
 
     module = Module.concat(["InjectVersion", unique_id("mod")])
 
@@ -150,12 +134,14 @@ defmodule Sandbox.RuntimeInjectionTest do
 
     {:ok, pid} = ProcessIsolator.start_link(name: isolator_name, table_name: table_name)
 
-    on_exit(fn ->
-      if Process.alive?(pid) do
-        GenServer.stop(pid)
-      end
-    end)
+    on_exit(fn -> stop_genserver(pid) end)
 
     assert [{"persisted", _}] = :ets.lookup(table_name, "persisted")
+  end
+
+  defp stop_genserver(pid) when is_pid(pid) do
+    GenServer.stop(pid)
+  catch
+    :exit, _ -> :ok
   end
 end

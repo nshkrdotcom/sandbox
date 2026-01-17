@@ -362,18 +362,12 @@ defmodule Sandbox do
   def batch_hot_reload(sandbox_ids, beam_or_source, opts \\ []) when is_list(sandbox_ids) do
     {stream_opts, call_opts} = split_batch_opts(opts)
     {mode, payload} = normalize_hot_reload_payload(beam_or_source)
+    runner = hot_reload_runner(mode, payload, call_opts)
 
     sandbox_ids
     |> Task.async_stream(
       fn sandbox_id ->
-        result =
-          safe_batch_call(fn ->
-            case mode do
-              :beam -> hot_reload(sandbox_id, payload, call_opts)
-              :source -> hot_reload_source(sandbox_id, payload, call_opts)
-            end
-          end)
-
+        result = safe_batch_call(fn -> runner.(sandbox_id) end)
         {sandbox_id, result}
       end,
       max_concurrency: Keyword.get(stream_opts, :max_concurrency, System.schedulers_online()),
@@ -388,23 +382,7 @@ defmodule Sandbox do
     timeout = effective_timeout(run_opts, resource_limits)
 
     if is_pid(run_supervisor_pid) and Process.alive?(run_supervisor_pid) do
-      task =
-        Task.Supervisor.async_nolink(run_supervisor_pid, fn ->
-          Process.put(:sandbox_id, sandbox_id)
-          fun.()
-        end)
-
-      case Task.yield(task, timeout) do
-        {:ok, result} ->
-          {:ok, result}
-
-        {:exit, reason} ->
-          {:error, {:crashed, reason}}
-
-        nil ->
-          Task.shutdown(task, :brutal_kill)
-          {:error, :timeout}
-      end
+      start_and_await_run(run_supervisor_pid, sandbox_id, fun, timeout)
     else
       {:error, {:crashed, :run_supervisor_unavailable}}
     end
@@ -442,30 +420,20 @@ defmodule Sandbox do
           ModuleTransformer.sanitize_sandbox_id(sandbox_id)
         )
 
-    case ModuleTransformer.transform_source(source_code, sandbox_id,
-           namespace_prefix: namespace_prefix
-         ) do
-      {:ok, transformed_code, module_mappings} ->
-        case compile_transformed_source(transformed_code) do
-          {:ok, modules} ->
-            case load_hot_reload_modules(sandbox_id, modules, context, opts) do
-              {:ok, :hot_reloaded} ->
-                register_module_mappings(
-                  sandbox_id,
-                  module_mappings,
-                  context.table_prefixes.module_registry
-                )
+    with {:ok, transformed_code, module_mappings} <-
+           ModuleTransformer.transform_source(source_code, sandbox_id,
+             namespace_prefix: namespace_prefix
+           ),
+         {:ok, modules} <- compile_transformed_source(transformed_code),
+         {:ok, :hot_reloaded} <- load_hot_reload_modules(sandbox_id, modules, context, opts) do
+      register_module_mappings(
+        sandbox_id,
+        module_mappings,
+        context.table_prefixes.module_registry
+      )
 
-                {:ok, :hot_reloaded}
-
-              {:error, reason} ->
-                {:error, reason}
-            end
-
-          {:error, reason} ->
-            {:error, {:compilation_failed, reason}}
-        end
-
+      {:ok, :hot_reloaded}
+    else
       {:error, {:parse_error, _line, _error, _token} = reason} ->
         {:error, {:parse_failed, reason}}
 
@@ -517,7 +485,7 @@ defmodule Sandbox do
     end)
     |> case do
       :ok -> {:ok, :hot_reloaded}
-      {:error, reason} -> {:error, {:compilation_failed, reason}}
+      {:error, reason} -> {:error, reason}
     end
   end
 
@@ -568,6 +536,14 @@ defmodule Sandbox do
 
   defp normalize_hot_reload_payload(_payload), do: {:source, ""}
 
+  defp hot_reload_runner(:beam, payload, opts) do
+    fn sandbox_id -> hot_reload(sandbox_id, payload, opts) end
+  end
+
+  defp hot_reload_runner(:source, payload, opts) do
+    fn sandbox_id -> hot_reload_source(sandbox_id, payload, opts) end
+  end
+
   defp beam_binary?(binary) when is_binary(binary) do
     case :beam_lib.info(binary) do
       info when is_list(info) -> true
@@ -575,5 +551,62 @@ defmodule Sandbox do
     end
   rescue
     _ -> false
+  end
+
+  defp start_and_await_run(run_supervisor_pid, sandbox_id, fun, timeout) do
+    parent = self()
+
+    case Task.Supervisor.start_child(run_supervisor_pid, fn ->
+           Process.put(:sandbox_id, sandbox_id)
+           send(parent, {:sandbox_run_result, self(), run_fun_safely(fun)})
+         end) do
+      {:ok, pid} ->
+        await_run_result(pid, timeout)
+
+      {:error, reason} ->
+        {:error, {:crashed, reason}}
+
+      :ignore ->
+        {:error, {:crashed, :ignored}}
+    end
+  end
+
+  defp run_fun_safely(fun) do
+    {:ok, fun.()}
+  rescue
+    error ->
+      {:error, {:crashed, error}}
+  catch
+    :exit, reason ->
+      {:error, {:crashed, reason}}
+
+    :throw, reason ->
+      {:error, {:crashed, reason}}
+  end
+
+  defp await_run_result(pid, timeout) do
+    ref = Process.monitor(pid)
+
+    receive do
+      {:sandbox_run_result, ^pid, result} ->
+        Process.demonitor(ref, [:flush])
+        result
+
+      {:DOWN, ^ref, :process, ^pid, reason} ->
+        fetch_result_or_crash(pid, reason)
+    after
+      timeout ->
+        Process.exit(pid, :kill)
+        Process.demonitor(ref, [:flush])
+        {:error, :timeout}
+    end
+  end
+
+  defp fetch_result_or_crash(pid, reason) do
+    receive do
+      {:sandbox_run_result, ^pid, result} -> result
+    after
+      0 -> {:error, {:crashed, reason}}
+    end
   end
 end

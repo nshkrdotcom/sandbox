@@ -2400,24 +2400,30 @@ defmodule Sandbox.Manager do
   end
 
   defp lookup_existing_run_supervisor(supervisor_pid, sandbox_id, sandbox_state) do
-    case Supervisor.which_children(supervisor_pid) do
-      children when is_list(children) ->
-        case Enum.find(children, fn {id, _pid, _type, _modules} ->
-               id == {:sandbox_run_supervisor, sandbox_id}
-             end) do
-          {_, pid, _, _} when is_pid(pid) ->
-            {:ok, %{sandbox_state | run_supervisor_pid: pid}, pid}
+    supervisor_pid
+    |> Supervisor.which_children()
+    |> find_run_supervisor_pid(sandbox_id)
+    |> case do
+      {:ok, pid} ->
+        {:ok, %{sandbox_state | run_supervisor_pid: pid}, pid}
 
-          _ ->
-            {:error, :run_supervisor_not_found}
-        end
-
-      _ ->
+      :error ->
         {:error, :run_supervisor_not_found}
     end
   rescue
     ArgumentError ->
       {:error, :run_supervisor_not_found}
+  end
+
+  defp find_run_supervisor_pid(children, sandbox_id) do
+    children
+    |> Enum.find(fn {id, _pid, _type, _modules} ->
+      id == {:sandbox_run_supervisor, sandbox_id}
+    end)
+    |> case do
+      {_, pid, _, _} when is_pid(pid) -> {:ok, pid}
+      _ -> :error
+    end
   end
 
   defp parse_module_or_app(module_or_app, opts) do

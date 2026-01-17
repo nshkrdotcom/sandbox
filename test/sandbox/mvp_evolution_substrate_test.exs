@@ -125,7 +125,7 @@ defmodule Sandbox.MvpEvolutionSubstrateTest do
         table_prefix: table_prefixes.module_registry
       )
 
-    result = apply(transformed, :hello, [])
+    result = transformed.hello()
 
     assert result == :world
   end
@@ -186,7 +186,7 @@ defmodule Sandbox.MvpEvolutionSubstrateTest do
 
     {:ok, :hot_reloaded} = Sandbox.hot_reload_source(sandbox_id, source, server: manager)
 
-    result = apply(transformed, :hello, [])
+    result = transformed.hello()
 
     assert result == :updated
   end
