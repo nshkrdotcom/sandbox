@@ -796,44 +796,22 @@ defmodule Sandbox.IsolatedCompiler do
 
   defp compile_with(:mix, sandbox_path, build_env, opts) do
     use_in_process = Keyword.get(opts, :in_process, false)
-    incremental = Keyword.get(opts, :incremental, false)
-    force_recompile = Keyword.get(opts, :force_recompile, false)
+    mix_command = mix_compile_command()
 
-    {cmd, base_args} =
-      case System.find_executable("elixir") do
-        nil ->
-          case System.find_executable("mix") do
-            nil -> {nil, []}
-            mix_path -> {mix_path, ["compile"]}
-          end
-
-        elixir_path ->
-          {elixir_path, ["-S", "mix", "compile"]}
-      end
-
-    cond do
-      use_in_process or is_nil(cmd) ->
-        Logger.debug("Using in-process compilation for mix", use_in_process: use_in_process)
-        compile_with(:in_process, sandbox_path, build_env, opts)
-
-      true ->
+    case mix_command do
+      {:ok, cmd, base_args} when not use_in_process ->
         Logger.debug("Using external elixir compilation")
-
-        args =
-          base_args
-          |> then(fn base ->
-            if force_recompile or not incremental do
-              base ++ ["--force"]
-            else
-              base
-            end
-          end)
+        args = mix_compile_args(base_args, opts)
 
         System.cmd(cmd, args,
           stderr_to_stdout: true,
           env: build_env,
           cd: sandbox_path
         )
+
+      _ ->
+        Logger.debug("Using in-process compilation for mix", use_in_process: use_in_process)
+        compile_with(:in_process, sandbox_path, build_env, opts)
     end
   end
 
@@ -841,32 +819,11 @@ defmodule Sandbox.IsolatedCompiler do
     use_in_process = Keyword.get(opts, :in_process, false)
     elixirc_path = System.find_executable("elixirc")
 
-    cond do
-      use_in_process or is_nil(elixirc_path) ->
-        Logger.debug("Using in-process compilation for elixirc", use_in_process: use_in_process)
-        compile_with(:in_process, sandbox_path, build_env, opts)
-
-      true ->
-        files =
-          case Keyword.get(opts, :source_files, []) do
-            [] -> Path.wildcard(Path.join([sandbox_path, "lib", "**", "*.ex"]))
-            source_files -> Enum.map(source_files, &Path.expand(&1, sandbox_path))
-          end
-
-        if files != [] do
-          output_path = resolve_elixirc_output_path(sandbox_path, build_env)
-          File.mkdir_p!(output_path)
-
-          args = ["-pa", output_path, "-o", output_path] ++ files
-
-          System.cmd(elixirc_path, args,
-            stderr_to_stdout: true,
-            env: build_env,
-            cd: sandbox_path
-          )
-        else
-          {"No .ex files found to compile", 0}
-        end
+    if use_in_process or is_nil(elixirc_path) do
+      Logger.debug("Using in-process compilation for elixirc", use_in_process: use_in_process)
+      compile_with(:in_process, sandbox_path, build_env, opts)
+    else
+      compile_with_elixirc(elixirc_path, sandbox_path, build_env, opts)
     end
   end
 
@@ -898,6 +855,60 @@ defmodule Sandbox.IsolatedCompiler do
         output = "Compilation error: #{inspect(reason)}"
         IO.puts(:stderr, output)
         {output, 1}
+    end
+  end
+
+  defp mix_compile_command do
+    case System.find_executable("elixir") do
+      nil ->
+        mix_compile_command_via_mix()
+
+      elixir_path ->
+        {:ok, elixir_path, ["-S", "mix", "compile"]}
+    end
+  end
+
+  defp mix_compile_command_via_mix do
+    case System.find_executable("mix") do
+      nil -> :error
+      mix_path -> {:ok, mix_path, ["compile"]}
+    end
+  end
+
+  defp mix_compile_args(base_args, opts) do
+    incremental = Keyword.get(opts, :incremental, false)
+    force_recompile = Keyword.get(opts, :force_recompile, false)
+
+    if force_recompile or not incremental do
+      base_args ++ ["--force"]
+    else
+      base_args
+    end
+  end
+
+  defp compile_with_elixirc(elixirc_path, sandbox_path, build_env, opts) do
+    files = resolve_elixirc_files(sandbox_path, opts)
+
+    if files == [] do
+      {"No .ex files found to compile", 0}
+    else
+      output_path = resolve_elixirc_output_path(sandbox_path, build_env)
+      File.mkdir_p!(output_path)
+
+      args = ["-pa", output_path, "-o", output_path] ++ files
+
+      System.cmd(elixirc_path, args,
+        stderr_to_stdout: true,
+        env: build_env,
+        cd: sandbox_path
+      )
+    end
+  end
+
+  defp resolve_elixirc_files(sandbox_path, opts) do
+    case Keyword.get(opts, :source_files, []) do
+      [] -> Path.wildcard(Path.join([sandbox_path, "lib", "**", "*.ex"]))
+      source_files -> Enum.map(source_files, &Path.expand(&1, sandbox_path))
     end
   end
 
@@ -1078,7 +1089,7 @@ defmodule Sandbox.IsolatedCompiler do
           File.rm(tmp_path)
         end
 
-        raise error
+        reraise error, __STACKTRACE__
     end
   end
 

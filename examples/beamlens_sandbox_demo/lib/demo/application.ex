@@ -5,7 +5,7 @@ defmodule Demo.Application do
 
   def start(_type, _args) do
     children = [
-      {Beamlens, operators: [Demo.SandboxSkill]}
+      {Beamlens, operators: [Demo.SandboxSkill, Demo.SandboxAnomalySkill]}
     ]
 
     Supervisor.start_link(children, strategy: :one_for_one, name: Demo.Supervisor)

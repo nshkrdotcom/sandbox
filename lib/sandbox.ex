@@ -451,11 +451,18 @@ defmodule Sandbox do
   end
 
   defp compile_transformed_source(transformed_code) do
-    {:ok, Code.compile_string(transformed_code)}
-  rescue
-    error -> {:error, error}
-  catch
-    :exit, reason -> {:error, reason}
+    original_opts = Code.compiler_options()
+    Code.compiler_options(ignore_module_conflict: true)
+
+    try do
+      {:ok, Code.compile_string(transformed_code)}
+    rescue
+      error -> {:error, error}
+    catch
+      :exit, reason -> {:error, reason}
+    after
+      Code.compiler_options(original_opts)
+    end
   end
 
   defp load_hot_reload_modules(sandbox_id, modules, context, _opts) do

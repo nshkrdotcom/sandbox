@@ -19,8 +19,56 @@ defmodule Demo.SandboxRunner do
     end
   end
 
+  def induce_process_load(sandbox_id, count \\ 25)
+
+  def induce_process_load(sandbox_id, count)
+      when is_binary(sandbox_id) and is_integer(count) and count > 0 do
+    with {:ok, supervisor_pid} <- sandbox_supervisor_pid(sandbox_id),
+         {:ok, started} <-
+           Sandbox.run(sandbox_id, fn ->
+             Enum.reduce(1..count, 0, fn index, acc ->
+               child_id = {:demo_load, index, System.unique_integer([:positive])}
+
+               spec = %{
+                 id: child_id,
+                 start: {Task, :start_link, [fn -> Process.sleep(:infinity) end]},
+                 restart: :temporary,
+                 shutdown: 5_000
+               }
+
+               case Supervisor.start_child(supervisor_pid, spec) do
+                 {:ok, _pid} -> acc + 1
+                 {:error, {:already_started, _pid}} -> acc + 1
+                 _ -> acc
+               end
+             end)
+           end) do
+      {:ok, started}
+    end
+  end
+
+  def induce_process_load(_sandbox_id, _count) do
+    {:error, :invalid_process_load}
+  end
+
   def destroy_sandbox(sandbox_id) do
     Sandbox.destroy_sandbox(sandbox_id)
+  end
+
+  defp sandbox_supervisor_pid(sandbox_id) do
+    case Sandbox.get_sandbox_info(sandbox_id) do
+      {:ok, %{supervisor_pid: pid}} when is_pid(pid) ->
+        if Process.alive?(pid), do: {:ok, pid}, else: {:error, :supervisor_not_running}
+
+      {:ok, %{app_pid: pid}} when is_pid(pid) ->
+        if Process.alive?(pid), do: {:ok, pid}, else: {:error, :supervisor_not_running}
+
+      {:ok, _info} ->
+        {:error, :supervisor_not_available}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
   end
 
   defp resolve_module(sandbox_id, module) do

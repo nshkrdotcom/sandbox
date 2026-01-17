@@ -59,8 +59,8 @@ defmodule Sandbox.ProcessIsolator do
   - `sandbox_id`: Unique identifier for the sandbox
 
   ## Returns
-  - `:ok` - Context destroyed successfully
-  - `{:error, reason}` - Destruction failed
+  - `:ok` - Context destroyed successfully (or was already absent)
+  - `{:error, reason}` - Destruction failed for other reasons
   """
   def destroy_isolated_context(sandbox_id, opts \\ []) do
     server = Keyword.get(opts, :server, __MODULE__)
@@ -161,12 +161,9 @@ defmodule Sandbox.ProcessIsolator do
         Logger.info("Destroyed isolated context for sandbox #{sandbox_id}")
         {:reply, :ok, updated_state}
 
-      {:error, reason} ->
-        Logger.error("Failed to destroy isolated context for sandbox #{sandbox_id}",
-          reason: inspect(reason)
-        )
-
-        {:reply, {:error, reason}, state}
+      {:error, :not_found} ->
+        Logger.debug("Isolated context already destroyed for sandbox #{sandbox_id}")
+        {:reply, :ok, state}
     end
   end
 

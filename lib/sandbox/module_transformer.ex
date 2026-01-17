@@ -364,6 +364,7 @@ defmodule Sandbox.ModuleTransformer do
       "Stream",
       "Map",
       "List",
+      "Keyword",
       "Tuple",
       "Integer",
       "Float",

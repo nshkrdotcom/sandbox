@@ -144,8 +144,7 @@ defmodule Sandbox.ProcessIsolatorTest do
     end
 
     test "handles non-existent context gracefully", %{isolator: isolator} do
-      assert {:error, :not_found} =
-               ProcessIsolator.destroy_isolated_context("non_existent", server: isolator)
+      assert :ok = ProcessIsolator.destroy_isolated_context("non_existent", server: isolator)
     end
   end
 

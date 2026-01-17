@@ -194,46 +194,32 @@ defmodule Sandbox.InProcessCompiler do
 
     parallel? = Keyword.get(opts, :parallel, false) and length(absolute_source_files) > 1
 
-    result =
-      if parallel? do
-        Kernel.ParallelCompiler.compile_to_path(
-          absolute_source_files,
-          absolute_output_path,
-          compiler_opts
-        )
-      else
-        compile_files_serial(absolute_source_files, absolute_output_path)
-      end
-
-    case result do
-      {:ok, modules, warnings} ->
-        {:ok, modules, warnings}
-
-      {:error, errors, warnings} ->
-        {:error, errors, warnings}
-
-      other ->
-        {:error, [%{file: "unknown", line: nil, message: inspect(other)}], []}
+    if parallel? do
+      Kernel.ParallelCompiler.compile_to_path(
+        absolute_source_files,
+        absolute_output_path,
+        compiler_opts
+      )
+    else
+      compile_files_serial(absolute_source_files, absolute_output_path)
     end
   end
 
   defp compile_files_serial(source_files, output_path) do
-    try do
-      modules =
-        Enum.flat_map(source_files, fn file ->
-          compiled = Code.compile_file(file)
+    modules =
+      Enum.flat_map(source_files, fn file ->
+        compiled = Code.compile_file(file)
 
-          Enum.map(compiled, fn {module, bytecode} ->
-            maybe_write_beam_file(output_path, module, bytecode)
-            module
-          end)
+        Enum.map(compiled, fn {module, bytecode} ->
+          maybe_write_beam_file(output_path, module, bytecode)
+          module
         end)
+      end)
 
-      {:ok, modules, []}
-    rescue
-      error ->
-        {:error, [compile_exception_to_diagnostic(error)], []}
-    end
+    {:ok, modules, []}
+  rescue
+    error ->
+      {:error, [compile_exception_to_diagnostic(error)], []}
   end
 
   defp compile_exception_to_diagnostic(error) do

@@ -146,6 +146,7 @@
                :beam_files,
                :module_transformations,
                :transformed_modules,
+               :use_in_process,
                # Supervisor and application lifecycle
                :supervisor_pid,
                :app_name,
@@ -179,6 +180,7 @@
                :files_count,
                :temp_dir,
                :path,
+               :cache_dir,
                # Additional keys found in codebase
                :original_path,
                :unique_path,

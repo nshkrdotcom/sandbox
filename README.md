@@ -12,10 +12,29 @@ Sandbox enables you to create, manage, and hot-reload isolated OTP applications 
 
 - **True Isolation**: Each sandbox has its own supervision tree and process hierarchy
 - **Hot Reload**: Update running sandboxes without restarting
-- **Version Management**: Track and rollback module versions  
+- **Version Management**: Track and rollback module versions
 - **Fault Tolerance**: Sandbox crashes don't affect the host application
 - **Resource Control**: Compile-time limits and process monitoring
 - **Safe Compilation**: Isolated compilation prevents affecting the host system
+
+## Documentation
+
+Comprehensive guides are available to help you get the most out of Sandbox:
+
+### Getting Started
+- **[Getting Started](guides/getting_started.md)** - Installation, setup, and your first sandbox
+
+### Core Guides
+- **[Hot Reload](guides/hot_reload.md)** - Live code updates, version management, and state preservation
+- **[Module Transformation](guides/module_transformation.md)** - Namespace isolation and virtual code tables
+- **[Compilation](guides/compilation.md)** - Compilation backends, caching, and security
+- **[Configuration](guides/configuration.md)** - All configuration options and security profiles
+
+### Architecture
+- **[Architecture](guides/architecture.md)** - System design, components, and extension points
+- **[Evolution Substrate](guides/evolution_substrate.md)** - Vision for genetic programming and self-modifying systems
+
+> **Note**: For API documentation, run `mix docs` to generate HTML documentation locally, or visit the [HexDocs](https://hexdocs.pm/sandbox).
 
 ## Installation
 
@@ -24,7 +43,7 @@ Add `sandbox` to your list of dependencies in `mix.exs`:
 ```elixir
 def deps do
   [
-    {:sandbox, "~> 0.0.1"}
+    {:sandbox, "~> 0.1.0"}
   ]
 end
 ```
@@ -228,17 +247,25 @@ end
 
 ## Architecture
 
-Sandbox consists of three main components:
+Sandbox is built on a modular architecture with clearly separated concerns:
 
-1. **Manager**: Handles sandbox lifecycle (create, destroy, restart)
-2. **IsolatedCompiler**: Compiles code in isolation with resource limits
-3. **ModuleVersionManager**: Tracks versions and handles hot-swapping
+```
+┌─────────────────────────────────────────────────────────────┐
+│                     Sandbox.Application                      │
+├─────────────────────────────────────────────────────────────┤
+│  ┌─────────────┐  ┌─────────────────┐  ┌─────────────────┐ │
+│  │   Manager   │  │ ModuleVersion   │  │   Resource      │ │
+│  │ (lifecycle) │  │    Manager      │  │   Monitor       │ │
+│  └─────────────┘  └─────────────────┘  └─────────────────┘ │
+├─────────────────────────────────────────────────────────────┤
+│  ┌─────────────┐  ┌─────────────────┐  ┌─────────────────┐ │
+│  │  Security   │  │    Process      │  │   Isolated      │ │
+│  │ Controller  │  │    Isolator     │  │   Compiler      │ │
+│  └─────────────┘  └─────────────────┘  └─────────────────┘ │
+└─────────────────────────────────────────────────────────────┘
+```
 
-Each sandbox:
-- Has its own supervision tree
-- Runs in a separate application context
-- Can be hot-reloaded without affecting others
-- Is monitored for crashes and resource usage
+Each sandbox has its own supervision tree and can be hot-reloaded independently without affecting others. For detailed architecture documentation, see the **[Architecture Guide](guides/architecture.md)**.
 
 ## Best Practices
 
