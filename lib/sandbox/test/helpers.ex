@@ -9,7 +9,7 @@ defmodule Sandbox.Test.Helpers do
 
   # Note: These imports should be used in test modules that use this helper
   # import Supertester.OTPHelpers
-  # import Supertester.GenServerHelpers  
+  # import Supertester.GenServerHelpers
   # import Supertester.Assertions
 
   require Logger

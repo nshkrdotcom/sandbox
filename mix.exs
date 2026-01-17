@@ -43,6 +43,7 @@ defmodule Sandbox.MixProject do
 
       # Code analysis
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
+      {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
 
       # Testing
       {:stream_data, "~> 1.0"},

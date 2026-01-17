@@ -1,4 +1,5 @@
 defmodule Sandbox.ManagerCase do
+  @moduledoc false
   defmacro __using__(opts) do
     isolation = Keyword.get(opts, :isolation, :full_isolation)
     telemetry_isolation = Keyword.get(opts, :telemetry_isolation, true)

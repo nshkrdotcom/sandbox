@@ -1,0 +1,299 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
+  <defs>
+    <!-- Background gradient - deep earth tones -->
+    <linearGradient id="hexBg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#2d1f14"/>
+      <stop offset="50%" stop-color="#4a3728"/>
+      <stop offset="100%" stop-color="#1a120b"/>
+    </linearGradient>
+    
+    <!-- Border gradient - warm copper/bronze -->
+    <linearGradient id="hexBorder" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#d4a574"/>
+      <stop offset="30%" stop-color="#c9956a"/>
+      <stop offset="70%" stop-color="#b8845c"/>
+      <stop offset="100%" stop-color="#8b6340"/>
+    </linearGradient>
+    
+    <!-- Sand gradient - warm golden sand -->
+    <radialGradient id="sandGrad" cx="50%" cy="60%" r="50%">
+      <stop offset="0%" stop-color="#f5e6cc"/>
+      <stop offset="40%" stop-color="#e8d4b0"/>
+      <stop offset="70%" stop-color="#d4bc90"/>
+      <stop offset="100%" stop-color="#c4a875"/>
+    </radialGradient>
+    
+    <!-- Wood grain gradient -->
+    <linearGradient id="woodGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#8b5a2b"/>
+      <stop offset="25%" stop-color="#a0522d"/>
+      <stop offset="50%" stop-color="#8b5a2b"/>
+      <stop offset="75%" stop-color="#704214"/>
+      <stop offset="100%" stop-color="#5c3317"/>
+    </linearGradient>
+    
+    <!-- Shadow gradient -->
+    <linearGradient id="shadowGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="rgba(0,0,0,0.3)"/>
+      <stop offset="100%" stop-color="rgba(0,0,0,0)"/>
+    </linearGradient>
+    
+    <!-- Highlight gradient -->
+    <linearGradient id="highlightGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="rgba(255,255,255,0.4)"/>
+      <stop offset="100%" stop-color="rgba(255,255,255,0)"/>
+    </linearGradient>
+    
+    <!-- Sand dune shadows -->
+    <linearGradient id="duneShade1" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="rgba(139,99,64,0.4)"/>
+      <stop offset="50%" stop-color="rgba(139,99,64,0)"/>
+      <stop offset="100%" stop-color="rgba(139,99,64,0.2)"/>
+    </linearGradient>
+    
+    <!-- Glow filter for warmth -->
+    <filter id="warmGlow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="2" result="glow"/>
+      <feMerge>
+        <feMergeNode in="glow"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    
+    <!-- Sand texture filter -->
+    <filter id="sandTexture">
+      <feTurbulence type="fractalNoise" baseFrequency="0.8" numOctaves="4" result="noise"/>
+      <feDiffuseLighting in="noise" lighting-color="#f5e6cc" surfaceScale="1" result="diffLight">
+        <feDistantLight azimuth="45" elevation="60"/>
+      </feDiffuseLighting>
+      <feComposite in="SourceGraphic" in2="diffLight" operator="arithmetic" k1="1" k2="0" k3="0" k4="0"/>
+    </filter>
+    
+    <!-- Subtle grain -->
+    <filter id="grain">
+      <feTurbulence type="turbulence" baseFrequency="0.5" numOctaves="3" result="noise"/>
+      <feDisplacementMap in="SourceGraphic" in2="noise" scale="1" xChannelSelector="R" yChannelSelector="G"/>
+    </filter>
+    
+    <!-- Drop shadow -->
+    <filter id="dropShadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#000" flood-opacity="0.3"/>
+    </filter>
+    
+    <!-- Inner shadow for box -->
+    <filter id="innerShadow">
+      <feOffset dx="0" dy="2"/>
+      <feGaussianBlur stdDeviation="2" result="offset-blur"/>
+      <feComposite operator="out" in="SourceGraphic" in2="offset-blur" result="inverse"/>
+      <feFlood flood-color="#000" flood-opacity="0.4" result="color"/>
+      <feComposite operator="in" in="color" in2="inverse" result="shadow"/>
+      <feComposite operator="over" in="shadow" in2="SourceGraphic"/>
+    </filter>
+    
+    <!-- Elixir purple accent gradient -->
+    <linearGradient id="elixirAccent" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#9b59b6"/>
+      <stop offset="100%" stop-color="#6c3483"/>
+    </linearGradient>
+    
+    <!-- Tool metal gradient -->
+    <linearGradient id="metalGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#c0c0c0"/>
+      <stop offset="30%" stop-color="#e8e8e8"/>
+      <stop offset="50%" stop-color="#f5f5f5"/>
+      <stop offset="70%" stop-color="#d0d0d0"/>
+      <stop offset="100%" stop-color="#a0a0a0"/>
+    </linearGradient>
+    
+    <!-- Hexagon clip path -->
+    <clipPath id="hexClip">
+      <polygon points="100,8 185,54 185,146 100,192 15,146 15,54"/>
+    </clipPath>
+  </defs>
+  
+  <!-- Outer hexagon background -->
+  <polygon 
+    points="100,5 188,52 188,148 100,195 12,148 12,52" 
+    fill="url(#hexBg)" 
+    stroke="url(#hexBorder)" 
+    stroke-width="3"
+    filter="url(#dropShadow)"/>
+  
+  <!-- Inner highlight ring -->
+  <polygon 
+    points="100,12 181,55 181,145 100,188 19,145 19,55" 
+    fill="none" 
+    stroke="rgba(255,220,180,0.2)" 
+    stroke-width="1"/>
+  
+  <!-- Content group clipped to hexagon -->
+  <g clip-path="url(#hexClip)" transform="translate(0, -12)">
+    
+    <!-- Wooden sandbox box - 3D perspective -->
+    <!-- Back wall -->
+    <rect x="35" y="70" width="130" height="10" fill="url(#woodGrad)" opacity="0.8"/>
+    
+    <!-- Left wall -->
+    <polygon points="35,70 35,140 40,145 40,75" fill="url(#woodGrad)"/>
+    <polygon points="35,70 40,75 40,145 35,140" fill="rgba(0,0,0,0.2)"/>
+    
+    <!-- Right wall -->
+    <polygon points="165,70 165,140 160,145 160,75" fill="url(#woodGrad)"/>
+    <polygon points="165,70 160,75 160,145 165,140" fill="rgba(255,255,255,0.1)"/>
+    
+    <!-- Wood grain details - left -->
+    <line x1="36" y1="75" x2="36" y2="138" stroke="rgba(92,51,23,0.5)" stroke-width="0.5"/>
+    <line x1="38" y1="76" x2="38" y2="143" stroke="rgba(92,51,23,0.3)" stroke-width="0.3"/>
+    
+    <!-- Wood grain details - right -->
+    <line x1="164" y1="75" x2="164" y2="138" stroke="rgba(112,66,20,0.5)" stroke-width="0.5"/>
+    <line x1="162" y1="76" x2="162" y2="143" stroke="rgba(112,66,20,0.3)" stroke-width="0.3"/>
+    
+    <!-- Sand base layer -->
+    <ellipse cx="100" cy="130" rx="58" ry="18" fill="url(#sandGrad)" filter="url(#grain)"/>
+    
+    <!-- Sand dune formations -->
+    <path d="M45,125 Q60,115 80,122 Q100,128 120,118 Q140,112 155,125 L155,140 L45,140 Z" 
+          fill="#e8d4b0" opacity="0.9"/>
+    <path d="M50,130 Q70,122 90,128 Q110,134 130,125 Q145,120 155,130 L155,142 L50,142 Z" 
+          fill="#d4bc90" opacity="0.8"/>
+    
+    <!-- Sand ripple details -->
+    <path d="M55,128 Q75,124 95,128" stroke="#c4a875" stroke-width="0.8" fill="none" opacity="0.6"/>
+    <path d="M85,126 Q105,122 125,126" stroke="#c4a875" stroke-width="0.6" fill="none" opacity="0.5"/>
+    <path d="M95,132 Q115,128 135,132" stroke="#bfa87a" stroke-width="0.5" fill="none" opacity="0.4"/>
+    
+    <!-- Sandcastle - main tower -->
+    <g filter="url(#warmGlow)">
+      <!-- Base cylinder -->
+      <ellipse cx="100" cy="118" rx="18" ry="5" fill="#c4a875"/>
+      <rect x="82" y="90" width="36" height="28" fill="url(#sandGrad)"/>
+      <ellipse cx="100" cy="90" rx="18" ry="5" fill="#f5e6cc"/>
+      
+      <!-- Tower details - brick pattern -->
+      <line x1="84" y1="98" x2="116" y2="98" stroke="#bfa87a" stroke-width="0.5" opacity="0.6"/>
+      <line x1="84" y1="106" x2="116" y2="106" stroke="#bfa87a" stroke-width="0.5" opacity="0.6"/>
+      <line x1="84" y1="114" x2="116" y2="114" stroke="#bfa87a" stroke-width="0.5" opacity="0.6"/>
+      <line x1="92" y1="90" x2="92" y2="118" stroke="#bfa87a" stroke-width="0.3" opacity="0.4"/>
+      <line x1="100" y1="90" x2="100" y2="118" stroke="#bfa87a" stroke-width="0.3" opacity="0.4"/>
+      <line x1="108" y1="90" x2="108" y2="118" stroke="#bfa87a" stroke-width="0.3" opacity="0.4"/>
+      
+      <!-- Castle top crenellations -->
+      <rect x="82" y="85" width="5" height="8" fill="#f5e6cc"/>
+      <rect x="90" y="85" width="5" height="8" fill="#f5e6cc"/>
+      <rect x="98" y="85" width="5" height="8" fill="#f5e6cc"/>
+      <rect x="106" y="85" width="5" height="8" fill="#f5e6cc"/>
+      <rect x="113" y="85" width="5" height="8" fill="#f5e6cc"/>
+      
+      <!-- Crenellation shadows -->
+      <rect x="87" y="86" width="3" height="6" fill="rgba(0,0,0,0.15)"/>
+      <rect x="95" y="86" width="3" height="6" fill="rgba(0,0,0,0.15)"/>
+      <rect x="103" y="86" width="3" height="6" fill="rgba(0,0,0,0.15)"/>
+      <rect x="111" y="86" width="2" height="6" fill="rgba(0,0,0,0.15)"/>
+      
+      <!-- Mini tower on top -->
+      <ellipse cx="100" cy="82" rx="8" ry="2.5" fill="#c4a875"/>
+      <rect x="92" y="68" width="16" height="14" fill="url(#sandGrad)"/>
+      <ellipse cx="100" cy="68" rx="8" ry="2.5" fill="#f5e6cc"/>
+      
+      <!-- Cone roof -->
+      <polygon points="100,52 88,68 112,68" fill="#e8d4b0"/>
+      <polygon points="100,52 88,68 100,68" fill="#d4bc90"/>
+      
+      <!-- Flag on top -->
+      <line x1="100" y1="44" x2="100" y2="55" stroke="#8b5a2b" stroke-width="1.5"/>
+      <polygon points="100,44 112,48 100,52" fill="url(#elixirAccent)"/>
+      <polygon points="100,44 112,48 100,52" fill="none" stroke="#7d3c98" stroke-width="0.3"/>
+    </g>
+    
+    <!-- Small side tower left -->
+    <g>
+      <ellipse cx="62" cy="125" rx="10" ry="3" fill="#c4a875"/>
+      <rect x="52" y="105" width="20" height="20" fill="url(#sandGrad)"/>
+      <ellipse cx="62" cy="105" rx="10" ry="3" fill="#f5e6cc"/>
+      <!-- Mini crenellations -->
+      <rect x="52" y="101" width="4" height="6" fill="#f5e6cc"/>
+      <rect x="58" y="101" width="4" height="6" fill="#f5e6cc"/>
+      <rect x="64" y="101" width="4" height="6" fill="#f5e6cc"/>
+      <!-- Shadow -->
+      <rect x="56" y="102" width="2" height="4" fill="rgba(0,0,0,0.12)"/>
+      <rect x="62" y="102" width="2" height="4" fill="rgba(0,0,0,0.12)"/>
+    </g>
+    
+    <!-- Small side tower right -->
+    <g>
+      <ellipse cx="138" cy="125" rx="10" ry="3" fill="#c4a875"/>
+      <rect x="128" y="105" width="20" height="20" fill="url(#sandGrad)"/>
+      <ellipse cx="138" cy="105" rx="10" ry="3" fill="#f5e6cc"/>
+      <!-- Mini crenellations -->
+      <rect x="128" y="101" width="4" height="6" fill="#f5e6cc"/>
+      <rect x="134" y="101" width="4" height="6" fill="#f5e6cc"/>
+      <rect x="140" y="101" width="4" height="6" fill="#f5e6cc"/>
+      <!-- Shadow -->
+      <rect x="132" y="102" width="2" height="4" fill="rgba(0,0,0,0.12)"/>
+      <rect x="138" y="102" width="2" height="4" fill="rgba(0,0,0,0.12)"/>
+    </g>
+    
+    <!-- Toy shovel - detailed -->
+    <g transform="rotate(-25, 155, 115)">
+      <!-- Handle -->
+      <rect x="150" y="75" width="4" height="35" rx="1" fill="url(#elixirAccent)"/>
+      <rect x="149" y="73" width="6" height="5" rx="2" fill="#7d3c98"/>
+      <!-- Blade -->
+      <path d="M148,110 L156,110 L158,130 L146,130 Z" fill="url(#metalGrad)" stroke="#888" stroke-width="0.5"/>
+      <line x1="152" y1="112" x2="152" y2="128" stroke="#999" stroke-width="0.5"/>
+    </g>
+    
+    <!-- Toy bucket -->
+    <g transform="translate(35, 100)">
+      <!-- Bucket body -->
+      <path d="M0,20 L4,35 L20,35 L24,20 Z" fill="url(#elixirAccent)"/>
+      <ellipse cx="12" cy="20" rx="12" ry="3" fill="#9b59b6"/>
+      <ellipse cx="12" cy="35" rx="8" ry="2" fill="#6c3483"/>
+      <!-- Handle -->
+      <path d="M3,18 Q12,8 21,18" stroke="#7d3c98" stroke-width="2" fill="none"/>
+      <!-- Highlight -->
+      <line x1="6" y1="22" x2="9" y2="33" stroke="rgba(255,255,255,0.3)" stroke-width="1"/>
+    </g>
+    
+    <!-- Small sand pile with footprints -->
+    <ellipse cx="75" cy="138" rx="8" ry="3" fill="#d4bc90"/>
+    
+    <!-- Tiny shells scattered -->
+    <ellipse cx="115" cy="135" rx="2" ry="1.5" fill="#faf0e6" opacity="0.8"/>
+    <ellipse cx="88" cy="137" rx="1.5" ry="1" fill="#faf0e6" opacity="0.7" transform="rotate(30, 88, 137)"/>
+    <ellipse cx="130" cy="133" rx="1.8" ry="1.2" fill="#fef5e7" opacity="0.75"/>
+    
+    <!-- Front panel shadow -->
+    <rect x="40" y="140" width="120" height="8" fill="url(#shadowGrad)"/>
+    
+    <!-- Front wooden edge -->
+    <rect x="38" y="145" width="124" height="12" rx="2" fill="url(#woodGrad)"/>
+    <rect x="38" y="145" width="124" height="2" fill="rgba(255,255,255,0.15)"/>
+    <rect x="38" y="155" width="124" height="2" fill="rgba(0,0,0,0.2)"/>
+    
+    <!-- Wood nail details -->
+    <circle cx="45" cy="151" r="1.5" fill="#5c3317"/>
+    <circle cx="155" cy="151" r="1.5" fill="#5c3317"/>
+    <circle cx="100" cy="151" r="1.5" fill="#5c3317"/>
+    
+  </g>
+  
+  <!-- Subtle ambient sparkle effects -->
+  <circle cx="68" cy="95" r="1" fill="rgba(255,255,220,0.6)">
+    <animate attributeName="opacity" values="0.6;0.2;0.6" dur="2s" repeatCount="indefinite"/>
+  </circle>
+  <circle cx="132" cy="88" r="0.8" fill="rgba(255,255,220,0.5)">
+    <animate attributeName="opacity" values="0.5;0.1;0.5" dur="2.5s" repeatCount="indefinite"/>
+  </circle>
+  <circle cx="100" cy="60" r="0.6" fill="rgba(255,255,220,0.7)">
+    <animate attributeName="opacity" values="0.7;0.3;0.7" dur="1.8s" repeatCount="indefinite"/>
+  </circle>
+  
+  <!-- Outer glow accent -->
+  <polygon 
+    points="100,5 188,52 188,148 100,195 12,148 12,52" 
+    fill="none" 
+    stroke="rgba(212,165,116,0.3)" 
+    stroke-width="1"/>
+</svg>

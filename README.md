@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/sandbox.svg" width="200" alt="Sandbox Logo">
+</p>
+
 # Sandbox
 
 Isolated OTP application management with hot-reload capabilities for Elixir.

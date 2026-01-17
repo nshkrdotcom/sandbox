@@ -1,4 +1,5 @@
 defmodule SimpleSandbox do
+  @moduledoc false
   def hello do
     :world
   end

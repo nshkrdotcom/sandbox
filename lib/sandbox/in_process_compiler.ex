@@ -10,62 +10,61 @@ defmodule Sandbox.InProcessCompiler do
   Compiles Elixir source files in-process using the Elixir compiler APIs.
   """
   def compile_in_process(source_path, output_path, opts \\ []) do
-    # Ensure source path exists
-    if not File.exists?(source_path) do
+    if File.exists?(source_path) do
+      do_compile_in_process(source_path, output_path, opts)
+    else
       Logger.error("Source path not found: #{source_path}")
       {:error, {:source_path_not_found, source_path}}
-    else
-      # Preserve current working directory
-      original_cwd =
-        case File.cwd() do
-          {:ok, cwd} -> cwd
-          {:error, _} -> nil
-        end
-
-      try do
-        # Ensure output directory exists
-        File.mkdir_p!(output_path)
-
-        # Find all .ex files
-        source_files = find_source_files(source_path)
-
-        Logger.debug("In-process compiler found #{length(source_files)} files in #{source_path}")
-
-        result =
-          if Enum.empty?(source_files) do
-            # If no .ex files in subdirectories, check for modules in root
-            root_files = Path.wildcard(Path.join(source_path, "*.ex"))
-
-            if Enum.empty?(root_files) do
-              {:ok, %{beam_files: [], warnings: [], modules: []}}
-            else
-              compile_result = compile_files(root_files, output_path, opts)
-              handle_compile_result(compile_result, output_path)
-            end
-          else
-            # Compile files using Kernel.ParallelCompiler
-            compile_result = compile_files(source_files, output_path, opts)
-            handle_compile_result(compile_result, output_path)
-          end
-
-        # Restore original working directory if we have one
-        if original_cwd && File.exists?(original_cwd) do
-          File.cd!(original_cwd)
-        end
-
-        result
-      rescue
-        error ->
-          # Try to restore working directory even on error
-          if original_cwd && File.exists?(original_cwd) do
-            File.cd!(original_cwd)
-          end
-
-          Logger.error("In-process compilation failed: #{inspect(error)}")
-          Logger.error("Stacktrace: #{inspect(__STACKTRACE__)}")
-          {:error, {:compilation_failed, error}}
-      end
     end
+  end
+
+  defp do_compile_in_process(source_path, output_path, opts) do
+    original_cwd = get_original_cwd()
+
+    try do
+      File.mkdir_p!(output_path)
+      source_files = find_source_files(source_path)
+      Logger.debug("In-process compiler found #{length(source_files)} files in #{source_path}")
+
+      result = compile_source_files(source_files, source_path, output_path, opts)
+      restore_cwd(original_cwd)
+      result
+    rescue
+      error ->
+        restore_cwd(original_cwd)
+        Logger.error("In-process compilation failed: #{inspect(error)}")
+        Logger.error("Stacktrace: #{inspect(__STACKTRACE__)}")
+        {:error, {:compilation_failed, error}}
+    end
+  end
+
+  defp get_original_cwd do
+    case File.cwd() do
+      {:ok, cwd} -> cwd
+      {:error, _} -> nil
+    end
+  end
+
+  defp restore_cwd(nil), do: :ok
+
+  defp restore_cwd(original_cwd) do
+    if File.exists?(original_cwd), do: File.cd!(original_cwd)
+  end
+
+  defp compile_source_files([], source_path, output_path, opts) do
+    root_files = Path.wildcard(Path.join(source_path, "*.ex"))
+
+    if Enum.empty?(root_files) do
+      {:ok, %{beam_files: [], warnings: [], modules: []}}
+    else
+      compile_result = compile_files(root_files, output_path, opts)
+      handle_compile_result(compile_result, output_path)
+    end
+  end
+
+  defp compile_source_files(source_files, _source_path, output_path, opts) do
+    compile_result = compile_files(source_files, output_path, opts)
+    handle_compile_result(compile_result, output_path)
   end
 
   defp handle_compile_result(compile_result, output_path) do
@@ -96,34 +95,28 @@ defmodule Sandbox.InProcessCompiler do
   Compiles a single Elixir module from string source.
   """
   def compile_string(source_code, module_name, output_path \\ nil) do
-    try do
-      # Create a temporary file or use in-memory compilation
-      if output_path do
-        File.mkdir_p!(output_path)
-      end
-
-      # Use Code.compile_string/2
-      case Code.compile_string(source_code, module_name) do
-        [] ->
-          {:error, :no_bytecode_generated}
-
-        compiled ->
-          modules =
-            Enum.map(compiled, fn {module, bytecode} ->
-              if output_path do
-                beam_file = Path.join(output_path, "#{module}.beam")
-                File.write!(beam_file, bytecode)
-              end
-
-              module
-            end)
-
-          {:ok, modules}
-      end
-    rescue
-      error ->
-        {:error, {:compilation_error, error}}
+    # Create a temporary file or use in-memory compilation
+    if output_path do
+      File.mkdir_p!(output_path)
     end
+
+    # Use Code.compile_string/2
+    case Code.compile_string(source_code, module_name) do
+      [] ->
+        {:error, :no_bytecode_generated}
+
+      compiled ->
+        modules =
+          Enum.map(compiled, fn {module, bytecode} ->
+            maybe_write_beam_file(output_path, module, bytecode)
+            module
+          end)
+
+        {:ok, modules}
+    end
+  rescue
+    error ->
+      {:error, {:compilation_error, error}}
   end
 
   @doc """
@@ -142,6 +135,13 @@ defmodule Sandbox.InProcessCompiler do
   end
 
   # Private functions
+
+  defp maybe_write_beam_file(nil, _module, _bytecode), do: :ok
+
+  defp maybe_write_beam_file(output_path, module, bytecode) do
+    beam_file = Path.join(output_path, "#{module}.beam")
+    File.write!(beam_file, bytecode)
+  end
 
   defp find_source_files(source_path) do
     Path.wildcard(Path.join([source_path, "**", "*.ex"]))

@@ -198,28 +198,33 @@ defmodule Sandbox.Application do
       table_names.sandbox_security
     ]
 
-    Enum.into(tables, %{}, fn table ->
-      if :ets.whereis(table) != :undefined do
-        # The table can be deleted between the whereis/1 and info/1 calls.
-        # We must handle the :undefined case for :ets.info/1.
-        case :ets.info(table) do
-          info when is_list(info) ->
-            {table,
-             %{
-               size: info[:size],
-               memory: info[:memory],
-               type: info[:type],
-               protection: info[:protection]
-             }}
+    Enum.into(tables, %{}, fn table -> {table, get_table_info(table)} end)
+  end
 
-          :undefined ->
-            # The table was deleted after our check, which is fine.
-            {table, :not_found}
-        end
-      else
-        {table, :not_found}
-      end
-    end)
+  defp get_table_info(table) do
+    if :ets.whereis(table) == :undefined do
+      :not_found
+    else
+      fetch_table_info(table)
+    end
+  end
+
+  defp fetch_table_info(table) do
+    # The table can be deleted between the whereis/1 and info/1 calls.
+    # We must handle the :undefined case for :ets.info/1.
+    case :ets.info(table) do
+      info when is_list(info) ->
+        %{
+          size: info[:size],
+          memory: info[:memory],
+          type: info[:type],
+          protection: info[:protection]
+        }
+
+      :undefined ->
+        # The table was deleted after our check, which is fine.
+        :not_found
+    end
   end
 
   defp table_names_from_state(%{table_names: table_names}), do: table_names

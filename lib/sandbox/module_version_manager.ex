@@ -310,76 +310,14 @@ defmodule Sandbox.ModuleVersionManager do
            version_data.checksum == checksum
          end) do
       nil ->
-        # New version - calculate next version number
-        next_version =
-          case existing_versions do
-            [] ->
-              1
-
-            versions ->
-              max_version =
-                versions
-                |> Enum.map(fn {_key, version_data} -> version_data.version end)
-                |> Enum.max()
-
-              max_version + 1
-          end
-
-        # Extract dependencies from BEAM with enhanced analysis
-        case do_extract_beam_dependencies(beam_data) do
-          {:ok, dependency_info} ->
-            dependencies = dependency_info.filtered_imports
-
-            # Check for circular dependencies with existing modules
-            case validate_no_circular_dependencies(table_name, sandbox_id, module, dependencies) do
-              :ok ->
-                module_version = %{
-                  sandbox_id: sandbox_id,
-                  module: module,
-                  version: next_version,
-                  beam_data: beam_data,
-                  loaded_at: DateTime.utc_now(),
-                  dependencies: dependencies,
-                  checksum: checksum,
-                  dependency_info: dependency_info
-                }
-
-                # Insert new version
-                :ets.insert(table_name, {{sandbox_id, module}, module_version})
-
-                # Clean up old versions if we exceed the limit
-                cleanup_old_versions(table_name, sandbox_id, module)
-
-                Logger.info("Registered module version with enhanced tracking",
-                  sandbox_id: sandbox_id,
-                  module: module,
-                  version: next_version,
-                  dependencies: length(dependencies),
-                  imports: length(dependency_info.imports),
-                  exports: length(dependency_info.exports)
-                )
-
-                {:ok, next_version}
-
-              {:error, circular_deps} ->
-                Logger.error("Circular dependency detected during registration",
-                  sandbox_id: sandbox_id,
-                  module: module,
-                  circular_dependencies: circular_deps
-                )
-
-                {:error, {:circular_dependency, circular_deps}}
-            end
-
-          {:error, reason} ->
-            Logger.error("Failed to extract dependencies during registration",
-              sandbox_id: sandbox_id,
-              module: module,
-              reason: reason
-            )
-
-            {:error, {:dependency_extraction_failed, reason}}
-        end
+        register_new_module_version(
+          table_name,
+          sandbox_id,
+          module,
+          beam_data,
+          checksum,
+          existing_versions
+        )
 
       {_key, existing} ->
         # Same checksum - return existing version (deduplication)
@@ -391,6 +329,103 @@ defmodule Sandbox.ModuleVersionManager do
         )
 
         {:ok, existing.version}
+    end
+  end
+
+  defp register_new_module_version(
+         table_name,
+         sandbox_id,
+         module,
+         beam_data,
+         checksum,
+         existing_versions
+       ) do
+    # New version - calculate next version number
+    next_version = calculate_next_version(existing_versions)
+
+    # Extract dependencies from BEAM with enhanced analysis
+    case do_extract_beam_dependencies(beam_data) do
+      {:ok, dependency_info} ->
+        insert_module_version(
+          table_name,
+          sandbox_id,
+          module,
+          beam_data,
+          checksum,
+          next_version,
+          dependency_info
+        )
+
+      {:error, reason} ->
+        Logger.error("Failed to extract dependencies during registration",
+          sandbox_id: sandbox_id,
+          module: module,
+          reason: reason
+        )
+
+        {:error, {:dependency_extraction_failed, reason}}
+    end
+  end
+
+  defp calculate_next_version([]), do: 1
+
+  defp calculate_next_version(versions) do
+    versions
+    |> Enum.map(fn {_key, version_data} -> version_data.version end)
+    |> Enum.max()
+    |> Kernel.+(1)
+  end
+
+  defp insert_module_version(
+         table_name,
+         sandbox_id,
+         module,
+         beam_data,
+         checksum,
+         next_version,
+         dependency_info
+       ) do
+    dependencies = dependency_info.filtered_imports
+
+    # Check for circular dependencies with existing modules
+    case validate_no_circular_dependencies(table_name, sandbox_id, module, dependencies) do
+      :ok ->
+        module_version = %{
+          sandbox_id: sandbox_id,
+          module: module,
+          version: next_version,
+          beam_data: beam_data,
+          loaded_at: DateTime.utc_now(),
+          dependencies: dependencies,
+          checksum: checksum,
+          dependency_info: dependency_info
+        }
+
+        # Insert new version
+        :ets.insert(table_name, {{sandbox_id, module}, module_version})
+
+        # Clean up old versions if we exceed the limit
+        cleanup_old_versions(table_name, sandbox_id, module)
+
+        Logger.info("Registered module version with enhanced tracking",
+          sandbox_id: sandbox_id,
+          module: module,
+          version: next_version,
+          dependencies: length(dependencies),
+          imports: length(dependency_info.imports),
+          exports: length(dependency_info.exports)
+        )
+
+        {:ok, next_version}
+
+      {:error, circular_deps} ->
+        Logger.error("Circular dependency detected during registration",
+          sandbox_id: sandbox_id,
+          module: module,
+          circular_dependencies: circular_deps
+        )
+
+        {:error, {:circular_dependency, circular_deps}}
     end
   end
 
@@ -412,33 +447,31 @@ defmodule Sandbox.ModuleVersionManager do
   end
 
   defp perform_hot_swap(table_name, sandbox_id, module, current_version, new_beam_data, opts) do
-    try do
-      # Check if we should coordinate with dependent modules
-      coordinate_dependencies = Keyword.get(opts, :coordinate_dependencies, true)
+    # Check if we should coordinate with dependent modules
+    coordinate_dependencies = Keyword.get(opts, :coordinate_dependencies, true)
 
-      if coordinate_dependencies do
-        perform_coordinated_hot_swap(
-          table_name,
-          sandbox_id,
-          module,
-          current_version,
-          new_beam_data,
-          opts
-        )
-      else
-        perform_simple_hot_swap(
-          table_name,
-          sandbox_id,
-          module,
-          current_version,
-          new_beam_data,
-          opts
-        )
-      end
-    rescue
-      error ->
-        {:error, {:swap_failed, error}}
+    if coordinate_dependencies do
+      perform_coordinated_hot_swap(
+        table_name,
+        sandbox_id,
+        module,
+        current_version,
+        new_beam_data,
+        opts
+      )
+    else
+      perform_simple_hot_swap(
+        table_name,
+        sandbox_id,
+        module,
+        current_version,
+        new_beam_data,
+        opts
+      )
     end
+  rescue
+    error ->
+      {:error, {:swap_failed, error}}
   end
 
   defp perform_coordinated_hot_swap(
@@ -453,41 +486,15 @@ defmodule Sandbox.ModuleVersionManager do
     dependent_modules = find_dependent_modules(table_name, sandbox_id, module)
 
     if dependent_modules != [] do
-      Logger.info("Coordinating hot-swap with dependent modules",
-        sandbox_id: sandbox_id,
-        module: module,
-        dependent_modules: dependent_modules
+      perform_hot_swap_with_dependents(
+        table_name,
+        sandbox_id,
+        module,
+        current_version,
+        new_beam_data,
+        opts,
+        dependent_modules
       )
-
-      case perform_simple_hot_swap(
-             table_name,
-             sandbox_id,
-             module,
-             current_version,
-             new_beam_data,
-             opts
-           ) do
-        {:ok, :hot_swapped} ->
-          reload_opts = Keyword.put_new(opts, :force_reload, true)
-
-          case do_cascading_reload(table_name, sandbox_id, dependent_modules, reload_opts) do
-            {:ok, :reloaded} ->
-              Logger.info("Coordinated hot-swap completed successfully",
-                sandbox_id: sandbox_id,
-                module: module,
-                from_version: current_version.version,
-                coordinated_modules: length(dependent_modules)
-              )
-
-              {:ok, :hot_swapped}
-
-            {:error, reason} ->
-              {:error, {:coordination_failed, reason}}
-          end
-
-        {:error, reason} ->
-          {:error, reason}
-      end
     else
       # No dependent modules, perform simple hot-swap
       perform_simple_hot_swap(
@@ -498,6 +505,70 @@ defmodule Sandbox.ModuleVersionManager do
         new_beam_data,
         opts
       )
+    end
+  end
+
+  defp perform_hot_swap_with_dependents(
+         table_name,
+         sandbox_id,
+         module,
+         current_version,
+         new_beam_data,
+         opts,
+         dependent_modules
+       ) do
+    Logger.info("Coordinating hot-swap with dependent modules",
+      sandbox_id: sandbox_id,
+      module: module,
+      dependent_modules: dependent_modules
+    )
+
+    case perform_simple_hot_swap(
+           table_name,
+           sandbox_id,
+           module,
+           current_version,
+           new_beam_data,
+           opts
+         ) do
+      {:ok, :hot_swapped} ->
+        reload_dependent_modules(
+          table_name,
+          sandbox_id,
+          module,
+          current_version,
+          opts,
+          dependent_modules
+        )
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp reload_dependent_modules(
+         table_name,
+         sandbox_id,
+         module,
+         current_version,
+         opts,
+         dependent_modules
+       ) do
+    reload_opts = Keyword.put_new(opts, :force_reload, true)
+
+    case do_cascading_reload(table_name, sandbox_id, dependent_modules, reload_opts) do
+      {:ok, :reloaded} ->
+        Logger.info("Coordinated hot-swap completed successfully",
+          sandbox_id: sandbox_id,
+          module: module,
+          from_version: current_version.version,
+          coordinated_modules: length(dependent_modules)
+        )
+
+        {:ok, :hot_swapped}
+
+      {:error, reason} ->
+        {:error, {:coordination_failed, reason}}
     end
   end
 
@@ -547,58 +618,114 @@ defmodule Sandbox.ModuleVersionManager do
          _processes,
          opts
        ) do
-    try do
-      # Capture states using StatePreservation
-      preservation_opts = merge_state_preservation_opts(opts)
+    # Capture states using StatePreservation
+    preservation_opts = merge_state_preservation_opts(opts)
 
-      case Sandbox.StatePreservation.capture_module_states(module, preservation_opts) do
-        {:ok, captured_states} ->
-          # Load new module version
-          case :code.load_binary(module, ~c"hot_swap", new_beam_data) do
-            {:module, ^module} ->
-              # Register the new version
-              case do_register_module_version(table_name, sandbox_id, module, new_beam_data) do
-                {:ok, new_version} ->
-                  # Restore states with StatePreservation
-                  case Sandbox.StatePreservation.restore_states(
-                         captured_states,
-                         current_version.version,
-                         new_version,
-                         preservation_opts
-                       ) do
-                    {:ok, :restored} ->
-                      Logger.info("Hot-swapped module with state preservation",
-                        sandbox_id: sandbox_id,
-                        module: module,
-                        from_version: current_version.version,
-                        to_version: new_version,
-                        preserved_processes: length(captured_states)
-                      )
+    case Sandbox.StatePreservation.capture_module_states(module, preservation_opts) do
+      {:ok, captured_states} ->
+        load_and_restore_with_state_preservation(
+          table_name,
+          sandbox_id,
+          module,
+          current_version,
+          new_beam_data,
+          captured_states,
+          preservation_opts
+        )
 
-                      {:ok, :hot_swapped}
+      {:error, reason} ->
+        {:error, {:state_capture_failed, reason}}
+    end
+  rescue
+    error ->
+      {:error, {:state_preservation_failed, error}}
+  end
 
-                    {:error, reason} ->
-                      # Rollback on state restoration failure
-                      rollback_module_load(module, current_version.beam_data)
-                      {:error, {:state_restoration_failed, reason}}
-                  end
+  defp load_and_restore_with_state_preservation(
+         table_name,
+         sandbox_id,
+         module,
+         current_version,
+         new_beam_data,
+         captured_states,
+         preservation_opts
+       ) do
+    # Load new module version
+    case :code.load_binary(module, ~c"hot_swap", new_beam_data) do
+      {:module, ^module} ->
+        register_and_restore_states(
+          table_name,
+          sandbox_id,
+          module,
+          current_version,
+          new_beam_data,
+          captured_states,
+          preservation_opts
+        )
 
-                {:error, reason} ->
-                  # Rollback module load
-                  rollback_module_load(module, current_version.beam_data)
-                  {:error, {:registration_failed, reason}}
-              end
+      {:error, reason} ->
+        {:error, {:swap_failed, reason}}
+    end
+  end
 
-            {:error, reason} ->
-              {:error, {:swap_failed, reason}}
-          end
+  defp register_and_restore_states(
+         table_name,
+         sandbox_id,
+         module,
+         current_version,
+         new_beam_data,
+         captured_states,
+         preservation_opts
+       ) do
+    # Register the new version
+    case do_register_module_version(table_name, sandbox_id, module, new_beam_data) do
+      {:ok, new_version} ->
+        restore_states_after_swap(
+          sandbox_id,
+          module,
+          current_version,
+          new_version,
+          captured_states,
+          preservation_opts
+        )
 
-        {:error, reason} ->
-          {:error, {:state_capture_failed, reason}}
-      end
-    rescue
-      error ->
-        {:error, {:state_preservation_failed, error}}
+      {:error, reason} ->
+        # Rollback module load
+        rollback_module_load(module, current_version.beam_data)
+        {:error, {:registration_failed, reason}}
+    end
+  end
+
+  defp restore_states_after_swap(
+         sandbox_id,
+         module,
+         current_version,
+         new_version,
+         captured_states,
+         preservation_opts
+       ) do
+    # Restore states with StatePreservation
+    case Sandbox.StatePreservation.restore_states(
+           captured_states,
+           current_version.version,
+           new_version,
+           preservation_opts
+         ) do
+      {:ok, :restored} ->
+        Logger.info("Hot-swapped module with state preservation",
+          sandbox_id: sandbox_id,
+          module: module,
+          from_version: current_version.version,
+          to_version: new_version,
+          preserved_processes: length(captured_states)
+        )
+
+        {:ok, :hot_swapped}
+
+      {:error, reason} ->
+        # Rollback on state restoration failure
+        rollback_module_load(module, current_version.beam_data)
+        {:error, {:state_restoration_failed, reason}}
     end
   end
 
@@ -617,45 +744,87 @@ defmodule Sandbox.ModuleVersionManager do
     # Load new module version
     case :code.load_binary(module, ~c"hot_swap", new_beam_data) do
       {:module, ^module} ->
-        # Register the new version
-        case do_register_module_version(table_name, sandbox_id, module, new_beam_data) do
-          {:ok, new_version} ->
-            # Get state handler if provided
-            state_handler = Keyword.get(opts, :state_handler)
-
-            # Migrate process states
-            case migrate_process_states(
-                   processes,
-                   captured_states,
-                   current_version.version,
-                   new_version,
-                   state_handler
-                 ) do
-              :ok ->
-                Logger.info("Hot-swapped module successfully (basic)",
-                  sandbox_id: sandbox_id,
-                  module: module,
-                  from_version: current_version.version,
-                  to_version: new_version,
-                  affected_processes: length(processes)
-                )
-
-                {:ok, :hot_swapped}
-
-              {:error, reason} ->
-                # Rollback on state migration failure
-                rollback_module_load(module, current_version.beam_data)
-                {:error, {:state_migration_failed, reason}}
-            end
-
-          {:error, reason} ->
-            # Rollback module load
-            rollback_module_load(module, current_version.beam_data)
-            {:error, {:registration_failed, reason}}
-        end
+        register_and_migrate_basic(
+          table_name,
+          sandbox_id,
+          module,
+          current_version,
+          new_beam_data,
+          processes,
+          captured_states,
+          opts
+        )
 
       {:error, reason} ->
         {:error, {:swap_failed, reason}}
+    end
+  end
+
+  defp register_and_migrate_basic(
+         table_name,
+         sandbox_id,
+         module,
+         current_version,
+         new_beam_data,
+         processes,
+         captured_states,
+         opts
+       ) do
+    # Register the new version
+    case do_register_module_version(table_name, sandbox_id, module, new_beam_data) do
+      {:ok, new_version} ->
+        migrate_states_basic(
+          sandbox_id,
+          module,
+          current_version,
+          new_version,
+          processes,
+          captured_states,
+          opts
+        )
+
+      {:error, reason} ->
+        # Rollback module load
+        rollback_module_load(module, current_version.beam_data)
+        {:error, {:registration_failed, reason}}
+    end
+  end
+
+  defp migrate_states_basic(
+         sandbox_id,
+         module,
+         current_version,
+         new_version,
+         processes,
+         captured_states,
+         opts
+       ) do
+    # Get state handler if provided
+    state_handler = Keyword.get(opts, :state_handler)
+
+    # Migrate process states
+    case migrate_process_states(
+           processes,
+           captured_states,
+           current_version.version,
+           new_version,
+           state_handler
+         ) do
+      :ok ->
+        Logger.info("Hot-swapped module successfully (basic)",
+          sandbox_id: sandbox_id,
+          module: module,
+          from_version: current_version.version,
+          to_version: new_version,
+          affected_processes: length(processes)
+        )
+
+        {:ok, :hot_swapped}
+
+      {:error, reason} ->
+        # Rollback on state migration failure
+        rollback_module_load(module, current_version.beam_data)
+        {:error, {:state_migration_failed, reason}}
     end
   end
 
@@ -711,168 +880,158 @@ defmodule Sandbox.ModuleVersionManager do
   end
 
   defp do_calculate_reload_order(table_name, modules, opts) do
-    try do
-      # Get dependency graph
-      dependency_graph = do_get_module_dependencies(table_name, modules, opts)
+    # Get dependency graph
+    dependency_graph = do_get_module_dependencies(table_name, modules, opts)
 
-      # Check for circular dependencies first
-      case do_detect_circular_dependencies(dependency_graph) do
-        {:ok, :no_cycles} ->
-          # Perform topological sort
-          case topological_sort(dependency_graph, modules) do
-            {:ok, sorted_modules} -> {:ok, sorted_modules}
-            {:error, reason} -> {:error, reason}
-          end
+    # Check for circular dependencies first
+    case do_detect_circular_dependencies(dependency_graph) do
+      {:ok, :no_cycles} ->
+        # Perform topological sort
+        case topological_sort(dependency_graph, modules) do
+          {:ok, sorted_modules} -> {:ok, sorted_modules}
+          {:error, reason} -> {:error, reason}
+        end
 
-        {:error, reason} ->
-          {:error, reason}
-      end
-    rescue
-      error ->
-        Logger.error("Failed to calculate reload order",
-          modules: modules,
-          error: inspect(error)
-        )
-
-        {:error, {:calculation_failed, error}}
+      {:error, reason} ->
+        {:error, reason}
     end
+  rescue
+    error ->
+      Logger.error("Failed to calculate reload order",
+        modules: modules,
+        error: inspect(error)
+      )
+
+      {:error, {:calculation_failed, error}}
   end
 
   defp do_cascading_reload(table_name, sandbox_id, modules, opts) do
-    try do
-      # Calculate reload order
-      dependency_opts = Keyword.put(opts, :sandbox_id, sandbox_id)
+    # Calculate reload order
+    dependency_opts = Keyword.put(opts, :sandbox_id, sandbox_id)
 
-      case do_calculate_reload_order(table_name, modules, dependency_opts) do
-        {:ok, ordered_modules} ->
-          Logger.info("Starting cascading reload",
-            sandbox_id: sandbox_id,
-            modules: modules,
-            reload_order: ordered_modules
-          )
-
-          # Reload modules in dependency order
-          result = reload_modules_in_order(table_name, sandbox_id, ordered_modules, opts)
-
-          case result do
-            :ok ->
-              Logger.info("Cascading reload completed successfully",
-                sandbox_id: sandbox_id,
-                modules_reloaded: length(ordered_modules)
-              )
-
-              {:ok, :reloaded}
-
-            {:error, reason} ->
-              Logger.error("Cascading reload failed",
-                sandbox_id: sandbox_id,
-                reason: reason
-              )
-
-              {:error, reason}
-          end
-
-        {:error, reason} ->
-          {:error, reason}
-      end
-    rescue
-      error ->
-        Logger.error("Cascading reload failed with exception",
+    case do_calculate_reload_order(table_name, modules, dependency_opts) do
+      {:ok, ordered_modules} ->
+        Logger.info("Starting cascading reload",
           sandbox_id: sandbox_id,
-          error: inspect(error)
+          modules: modules,
+          reload_order: ordered_modules
         )
 
-        {:error, {:cascading_reload_failed, error}}
+        # Reload modules in dependency order
+        result = reload_modules_in_order(table_name, sandbox_id, ordered_modules, opts)
+
+        case result do
+          :ok ->
+            Logger.info("Cascading reload completed successfully",
+              sandbox_id: sandbox_id,
+              modules_reloaded: length(ordered_modules)
+            )
+
+            {:ok, :reloaded}
+
+          {:error, reason} ->
+            Logger.error("Cascading reload failed",
+              sandbox_id: sandbox_id,
+              reason: reason
+            )
+
+            {:error, reason}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
     end
+  rescue
+    error ->
+      Logger.error("Cascading reload failed with exception",
+        sandbox_id: sandbox_id,
+        error: inspect(error)
+      )
+
+      {:error, {:cascading_reload_failed, error}}
   end
 
   defp do_extract_beam_dependencies(beam_data) do
-    try do
-      case :beam_lib.chunks(beam_data, [:imports, :exports, :attributes]) do
-        {:ok, {module, chunks}} ->
-          imports = extract_imports_from_chunks(chunks)
-          exports = extract_exports_from_chunks(chunks)
-          attributes = extract_attributes_from_chunks(chunks)
+    case :beam_lib.chunks(beam_data, [:imports, :exports, :attributes]) do
+      {:ok, {module, chunks}} ->
+        imports = extract_imports_from_chunks(chunks)
+        exports = extract_exports_from_chunks(chunks)
+        attributes = extract_attributes_from_chunks(chunks)
 
-          dependencies = %{
-            module: module,
-            imports: imports,
-            exports: exports,
-            attributes: attributes,
-            filtered_imports: filter_relevant_imports(imports)
-          }
+        dependencies = %{
+          module: module,
+          imports: imports,
+          exports: exports,
+          attributes: attributes,
+          filtered_imports: filter_relevant_imports(imports)
+        }
 
-          {:ok, dependencies}
+        {:ok, dependencies}
 
-        {:error, :beam_lib, reason} ->
-          {:error, {:beam_analysis_failed, reason}}
-      end
-    rescue
-      error ->
-        {:error, {:extraction_failed, error}}
+      {:error, :beam_lib, reason} ->
+        {:error, {:beam_analysis_failed, reason}}
     end
+  rescue
+    error ->
+      {:error, {:extraction_failed, error}}
   end
 
   defp do_detect_circular_dependencies(dependency_graph) do
-    try do
-      case find_cycles_in_graph(dependency_graph) do
-        [] ->
-          {:ok, :no_cycles}
+    case find_cycles_in_graph(dependency_graph) do
+      [] ->
+        {:ok, :no_cycles}
 
-        cycles ->
-          Logger.warning("Circular dependencies detected", cycles: cycles)
-          {:error, {:circular_dependency, cycles}}
-      end
-    rescue
-      error ->
-        {:error, {:cycle_detection_failed, error}}
+      cycles ->
+        Logger.warning("Circular dependencies detected", cycles: cycles)
+        {:error, {:circular_dependency, cycles}}
     end
+  rescue
+    error ->
+      {:error, {:cycle_detection_failed, error}}
   end
 
   defp do_parallel_reload(table_name, sandbox_id, modules, opts) do
-    try do
-      # Get dependency graph
-      dependency_opts = Keyword.put(opts, :sandbox_id, sandbox_id)
-      dependency_graph = do_get_module_dependencies(table_name, modules, dependency_opts)
+    # Get dependency graph
+    dependency_opts = Keyword.put(opts, :sandbox_id, sandbox_id)
+    dependency_graph = do_get_module_dependencies(table_name, modules, dependency_opts)
 
-      # Group modules by dependency levels
-      dependency_levels = calculate_dependency_levels(dependency_graph, modules)
+    # Group modules by dependency levels
+    dependency_levels = calculate_dependency_levels(dependency_graph, modules)
 
-      Logger.info("Starting parallel reload",
-        sandbox_id: sandbox_id,
-        modules: modules,
-        dependency_levels: map_size(dependency_levels)
-      )
+    Logger.info("Starting parallel reload",
+      sandbox_id: sandbox_id,
+      modules: modules,
+      dependency_levels: map_size(dependency_levels)
+    )
 
-      # Reload modules level by level, with parallelization within each level
-      result = reload_modules_by_levels(table_name, sandbox_id, dependency_levels, opts)
+    # Reload modules level by level, with parallelization within each level
+    result = reload_modules_by_levels(table_name, sandbox_id, dependency_levels, opts)
 
-      case result do
-        :ok ->
-          Logger.info("Parallel reload completed successfully",
-            sandbox_id: sandbox_id,
-            modules_reloaded: length(modules)
-          )
-
-          {:ok, :reloaded}
-
-        {:error, reason} ->
-          Logger.error("Parallel reload failed",
-            sandbox_id: sandbox_id,
-            reason: reason
-          )
-
-          {:error, reason}
-      end
-    rescue
-      error ->
-        Logger.error("Parallel reload failed with exception",
+    case result do
+      :ok ->
+        Logger.info("Parallel reload completed successfully",
           sandbox_id: sandbox_id,
-          error: inspect(error)
+          modules_reloaded: length(modules)
         )
 
-        {:error, {:parallel_reload_failed, error}}
+        {:ok, :reloaded}
+
+      {:error, reason} ->
+        Logger.error("Parallel reload failed",
+          sandbox_id: sandbox_id,
+          reason: reason
+        )
+
+        {:error, reason}
     end
+  rescue
+    error ->
+      Logger.error("Parallel reload failed with exception",
+        sandbox_id: sandbox_id,
+        error: inspect(error)
+      )
+
+      {:error, {:parallel_reload_failed, error}}
   end
 
   defp do_cleanup_sandbox_modules(table_name, sandbox_id) do
@@ -957,20 +1116,18 @@ defmodule Sandbox.ModuleVersionManager do
   end
 
   defp extract_dependencies_from_beam_file(beam_file) do
-    try do
-      case :beam_lib.chunks(beam_file, [:imports]) do
-        {:ok, {_module, [{:imports, imports}]}} ->
-          imports
-          |> Enum.map(fn {module, _func, _arity} -> module end)
-          |> Enum.uniq()
-          |> Enum.reject(&is_erlang_stdlib_module/1)
+    case :beam_lib.chunks(beam_file, [:imports]) do
+      {:ok, {_module, [{:imports, imports}]}} ->
+        imports
+        |> Enum.map(fn {module, _func, _arity} -> module end)
+        |> Enum.uniq()
+        |> Enum.reject(&erlang_stdlib_module?/1)
 
-        _ ->
-          []
-      end
-    rescue
-      _ -> []
+      _ ->
+        []
     end
+  rescue
+    _ -> []
   end
 
   defp dependencies_from_code(module) do
@@ -1003,7 +1160,7 @@ defmodule Sandbox.ModuleVersionManager do
     end
   end
 
-  defp is_erlang_stdlib_module(module) do
+  defp erlang_stdlib_module?(module) do
     module_str = to_string(module)
 
     # Check for Erlang/OTP modules
@@ -1113,11 +1270,9 @@ defmodule Sandbox.ModuleVersionManager do
   end
 
   defp rollback_module_load(module, old_beam_data) do
-    try do
-      :code.load_binary(module, ~c"rollback", old_beam_data)
-    rescue
-      _ -> :ok
-    end
+    :code.load_binary(module, ~c"rollback", old_beam_data)
+  rescue
+    _ -> :ok
   end
 
   # Advanced dependency analysis helper functions
@@ -1149,12 +1304,12 @@ defmodule Sandbox.ModuleVersionManager do
   end
 
   defp filter_relevant_imports(imports) do
-    imports
-    |> Enum.reject(&is_erlang_stdlib_module/1)
-    |> Enum.reject(&is_elixir_stdlib_module/1)
+    Enum.reject(imports, fn module ->
+      erlang_stdlib_module?(module) or elixir_stdlib_module?(module)
+    end)
   end
 
-  defp is_elixir_stdlib_module(module) do
+  defp elixir_stdlib_module?(module) do
     module_str = to_string(module)
 
     # Check for common Elixir stdlib modules
@@ -1184,15 +1339,13 @@ defmodule Sandbox.ModuleVersionManager do
   end
 
   defp topological_sort(dependency_graph, modules) do
-    try do
-      # Kahn's algorithm for topological sorting (dependencies before dependents)
-      {in_degree, dependents} = build_dependency_indexes(dependency_graph, modules)
-      queue = :queue.from_list(Enum.filter(modules, fn m -> Map.get(in_degree, m, 0) == 0 end))
+    # Kahn's algorithm for topological sorting (dependencies before dependents)
+    {in_degree, dependents} = build_dependency_indexes(dependency_graph, modules)
+    queue = :queue.from_list(Enum.filter(modules, fn m -> Map.get(in_degree, m, 0) == 0 end))
 
-      topological_sort_loop(queue, dependents, in_degree, [])
-    rescue
-      error -> {:error, {:topological_sort_failed, error}}
-    end
+    topological_sort_loop(queue, dependents, in_degree, [])
+  rescue
+    error -> {:error, {:topological_sort_failed, error}}
   end
 
   defp topological_sort_loop(queue, dependents, in_degree, result) do
@@ -1204,26 +1357,33 @@ defmodule Sandbox.ModuleVersionManager do
         dependencies = Map.get(dependents, current, [])
 
         {updated_in_degree, updated_queue} =
-          Enum.reduce(dependencies, {in_degree, remaining_queue}, fn dependent,
-                                                                     {in_deg_acc, queue_acc} ->
-            new_in_degree = Map.update(in_deg_acc, dependent, 0, &(&1 - 1))
-
-            if Map.get(new_in_degree, dependent, 0) == 0 do
-              {new_in_degree, :queue.in(dependent, queue_acc)}
-            else
-              {new_in_degree, queue_acc}
-            end
-          end)
+          update_in_degrees_for_dependents(dependencies, in_degree, remaining_queue)
 
         topological_sort_loop(updated_queue, dependents, updated_in_degree, new_result)
 
       {:empty, _} ->
-        # Check if all modules were processed
-        if length(result) == map_size(in_degree) do
-          {:ok, Enum.reverse(result)}
-        else
-          {:error, :circular_dependency_detected}
-        end
+        finalize_topological_sort(result, in_degree)
+    end
+  end
+
+  defp update_in_degrees_for_dependents(dependencies, in_degree, queue) do
+    Enum.reduce(dependencies, {in_degree, queue}, fn dependent, {in_deg_acc, queue_acc} ->
+      new_in_degree = Map.update(in_deg_acc, dependent, 0, &(&1 - 1))
+
+      if Map.get(new_in_degree, dependent, 0) == 0 do
+        {new_in_degree, :queue.in(dependent, queue_acc)}
+      else
+        {new_in_degree, queue_acc}
+      end
+    end)
+  end
+
+  defp finalize_topological_sort(result, in_degree) do
+    # Check if all modules were processed
+    if length(result) == map_size(in_degree) do
+      {:ok, Enum.reverse(result)}
+    else
+      {:error, :circular_dependency_detected}
     end
   end
 
@@ -1247,43 +1407,62 @@ defmodule Sandbox.ModuleVersionManager do
     end)
   end
 
+  # Using plain maps instead of MapSet to avoid Dialyzer opaque type issues with OTP 28
+  @spec find_cycles_in_graph(map()) :: [[atom()]]
   defp find_cycles_in_graph(dependency_graph) do
-    visited = MapSet.new()
-    rec_stack = MapSet.new()
+    visited = %{}
     cycles = []
 
     Enum.reduce(Map.keys(dependency_graph), {visited, cycles}, fn module, {vis_acc, cycles_acc} ->
-      if MapSet.member?(vis_acc, module) do
-        {vis_acc, cycles_acc}
-      else
-        case dfs_cycle_detection(module, dependency_graph, vis_acc, rec_stack, []) do
-          {:cycle, cycle_path} -> {MapSet.put(vis_acc, module), [cycle_path | cycles_acc]}
-          {:no_cycle, new_visited} -> {new_visited, cycles_acc}
-        end
-      end
+      detect_cycle_for_module(module, dependency_graph, vis_acc, cycles_acc)
     end)
     |> elem(1)
   end
 
-  defp dfs_cycle_detection(module, dependency_graph, visited, rec_stack, path) do
-    if MapSet.member?(rec_stack, module) do
-      # Found a cycle
-      cycle_start_index = Enum.find_index(path, &(&1 == module))
-      cycle_path = Enum.drop(path, cycle_start_index || 0)
-      {:cycle, cycle_path ++ [module]}
+  defp detect_cycle_for_module(module, dependency_graph, visited, cycles) do
+    if Map.has_key?(visited, module) do
+      {visited, cycles}
     else
-      new_visited = MapSet.put(visited, module)
-      new_rec_stack = MapSet.put(rec_stack, module)
-      new_path = [module | path]
+      case dfs_cycle_detection(module, dependency_graph, visited, %{}, []) do
+        {:cycle, cycle_path} -> {Map.put(visited, module, true), [cycle_path | cycles]}
+        {:no_cycle, new_visited} -> {new_visited, cycles}
+      end
+    end
+  end
 
-      dependencies = Map.get(dependency_graph, module, [])
+  @spec dfs_cycle_detection(atom(), map(), map(), map(), [atom()]) ::
+          {:cycle, [atom()]} | {:no_cycle, map()}
+  defp dfs_cycle_detection(module, dependency_graph, visited, rec_stack, path) do
+    if Map.has_key?(rec_stack, module) do
+      # Found a cycle
+      build_cycle_path(module, path)
+    else
+      traverse_dependencies_for_cycles(module, dependency_graph, visited, rec_stack, path)
+    end
+  end
 
-      Enum.reduce_while(dependencies, {:no_cycle, new_visited}, fn dep, {_result, vis_acc} ->
-        case dfs_cycle_detection(dep, dependency_graph, vis_acc, new_rec_stack, new_path) do
-          {:cycle, cycle_path} -> {:halt, {:cycle, cycle_path}}
-          {:no_cycle, updated_visited} -> {:cont, {:no_cycle, updated_visited}}
-        end
-      end)
+  defp build_cycle_path(module, path) do
+    cycle_start_index = Enum.find_index(path, &(&1 == module))
+    cycle_path = Enum.drop(path, cycle_start_index || 0)
+    {:cycle, cycle_path ++ [module]}
+  end
+
+  defp traverse_dependencies_for_cycles(module, dependency_graph, visited, rec_stack, path) do
+    new_visited = Map.put(visited, module, true)
+    new_rec_stack = Map.put(rec_stack, module, true)
+    new_path = [module | path]
+
+    dependencies = Map.get(dependency_graph, module, [])
+
+    Enum.reduce_while(dependencies, {:no_cycle, new_visited}, fn dep, {_result, vis_acc} ->
+      check_dependency_for_cycle(dep, dependency_graph, vis_acc, new_rec_stack, new_path)
+    end)
+  end
+
+  defp check_dependency_for_cycle(dep, dependency_graph, visited, rec_stack, path) do
+    case dfs_cycle_detection(dep, dependency_graph, visited, rec_stack, path) do
+      {:cycle, cycle_path} -> {:halt, {:cycle, cycle_path}}
+      {:no_cycle, updated_visited} -> {:cont, {:no_cycle, updated_visited}}
     end
   end
 
@@ -1299,47 +1478,77 @@ defmodule Sandbox.ModuleVersionManager do
     calculate_levels_iterative(dependency_graph, remaining_modules, levels, current_level)
   end
 
+  defp calculate_levels_iterative(_dependency_graph, remaining_modules, levels, _current_level)
+       when map_size(remaining_modules) == 0 or remaining_modules == %MapSet{} do
+    # Check if remaining_modules is empty
+    if MapSet.size(remaining_modules) == 0, do: levels, else: levels
+  end
+
   defp calculate_levels_iterative(dependency_graph, remaining_modules, levels, current_level) do
     if MapSet.size(remaining_modules) == 0 do
       levels
     else
-      # Find modules that can be placed at current level
-      modules_at_level =
-        remaining_modules
-        |> Enum.filter(fn module ->
-          dependencies = Map.get(dependency_graph, module, [])
-          # All dependencies should be in lower levels or not in our module set
-          Enum.all?(dependencies, fn dep ->
-            not MapSet.member?(remaining_modules, dep) or Map.has_key?(levels, dep)
-          end)
-        end)
+      modules_at_level = find_modules_at_level(dependency_graph, remaining_modules, levels)
 
-      if modules_at_level == [] do
-        # No progress possible - likely circular dependency
-        # Place remaining modules at current level
-        remaining_list = MapSet.to_list(remaining_modules)
-
-        updated_levels =
-          Enum.reduce(remaining_list, levels, fn module, acc ->
-            Map.update(acc, current_level, [module], &[module | &1])
-          end)
-
-        updated_levels
-      else
-        # Add modules to current level
-        updated_levels = Map.put(levels, current_level, modules_at_level)
-
-        updated_remaining =
-          Enum.reduce(modules_at_level, remaining_modules, &MapSet.delete(&2, &1))
-
-        calculate_levels_iterative(
-          dependency_graph,
-          updated_remaining,
-          updated_levels,
-          current_level + 1
-        )
-      end
+      process_level_modules(
+        dependency_graph,
+        remaining_modules,
+        levels,
+        current_level,
+        modules_at_level
+      )
     end
+  end
+
+  defp find_modules_at_level(dependency_graph, remaining_modules, levels) do
+    # Find modules that can be placed at current level
+    remaining_modules
+    |> Enum.filter(fn module ->
+      module_dependencies_satisfied?(dependency_graph, remaining_modules, levels, module)
+    end)
+  end
+
+  defp module_dependencies_satisfied?(dependency_graph, remaining_modules, levels, module) do
+    dependencies = Map.get(dependency_graph, module, [])
+    # All dependencies should be in lower levels or not in our module set
+    Enum.all?(dependencies, fn dep ->
+      not MapSet.member?(remaining_modules, dep) or Map.has_key?(levels, dep)
+    end)
+  end
+
+  defp process_level_modules(_dependency_graph, remaining_modules, levels, current_level, []) do
+    # No progress possible - likely circular dependency
+    # Place remaining modules at current level
+    place_remaining_at_level(remaining_modules, levels, current_level)
+  end
+
+  defp process_level_modules(
+         dependency_graph,
+         remaining_modules,
+         levels,
+         current_level,
+         modules_at_level
+       ) do
+    # Add modules to current level
+    updated_levels = Map.put(levels, current_level, modules_at_level)
+
+    updated_remaining =
+      Enum.reduce(modules_at_level, remaining_modules, &MapSet.delete(&2, &1))
+
+    calculate_levels_iterative(
+      dependency_graph,
+      updated_remaining,
+      updated_levels,
+      current_level + 1
+    )
+  end
+
+  defp place_remaining_at_level(remaining_modules, levels, current_level) do
+    remaining_list = MapSet.to_list(remaining_modules)
+
+    Enum.reduce(remaining_list, levels, fn module, acc ->
+      Map.update(acc, current_level, [module], &[module | &1])
+    end)
   end
 
   defp reload_modules_in_order(table_name, sandbox_id, ordered_modules, opts) do
@@ -1384,75 +1593,83 @@ defmodule Sandbox.ModuleVersionManager do
   end
 
   defp reload_single_module(table_name, sandbox_id, module, opts) do
-    try do
-      # Get current module version
-      case get_current_module_version(table_name, sandbox_id, module) do
-        nil ->
-          Logger.debug("Module not found in sandbox, skipping reload",
-            sandbox_id: sandbox_id,
-            module: module
-          )
+    # Get current module version
+    case get_current_module_version(table_name, sandbox_id, module) do
+      nil ->
+        Logger.debug("Module not found in sandbox, skipping reload",
+          sandbox_id: sandbox_id,
+          module: module
+        )
 
-          :ok
+        :ok
 
-        {_key, current_version} ->
-          force_reload = Keyword.get(opts, :force_reload, false)
+      {_key, current_version} ->
+        reload_existing_module(table_name, sandbox_id, module, current_version, opts)
+    end
+  rescue
+    error -> {:error, {:reload_failed, error}}
+  end
 
-          if force_reload do
-            case :code.load_binary(module, ~c"reload", current_version.beam_data) do
-              {:module, ^module} -> :ok
-              {:error, reason} -> {:error, {:reload_failed, reason}}
-            end
-          else
-            # Perform hot-swap with current BEAM data
-            case do_hot_swap_module(
-                   table_name,
-                   sandbox_id,
-                   module,
-                   current_version.beam_data,
-                   opts
-                 ) do
-              {:ok, :hot_swapped} -> :ok
-              {:ok, :no_change} -> :ok
-              {:error, reason} -> {:error, reason}
-            end
-          end
-      end
-    rescue
-      error -> {:error, {:reload_failed, error}}
+  defp reload_existing_module(table_name, sandbox_id, module, current_version, opts) do
+    force_reload = Keyword.get(opts, :force_reload, false)
+
+    if force_reload do
+      force_reload_module(module, current_version)
+    else
+      hot_swap_reload_module(table_name, sandbox_id, module, current_version, opts)
+    end
+  end
+
+  defp force_reload_module(module, current_version) do
+    case :code.load_binary(module, ~c"reload", current_version.beam_data) do
+      {:module, ^module} -> :ok
+      {:error, reason} -> {:error, {:reload_failed, reason}}
+    end
+  end
+
+  defp hot_swap_reload_module(table_name, sandbox_id, module, current_version, opts) do
+    # Perform hot-swap with current BEAM data
+    case do_hot_swap_module(
+           table_name,
+           sandbox_id,
+           module,
+           current_version.beam_data,
+           opts
+         ) do
+      {:ok, :hot_swapped} -> :ok
+      {:ok, :no_change} -> :ok
+      {:error, reason} -> {:error, reason}
     end
   end
 
   defp validate_no_circular_dependencies(table_name, sandbox_id, new_module, new_dependencies) do
-    try do
-      # Get all existing modules in the sandbox
-      existing_modules = get_sandbox_modules(table_name, sandbox_id)
+    # Get all existing modules in the sandbox
+    existing_modules = get_sandbox_modules(table_name, sandbox_id)
 
-      # Create a temporary dependency graph including the new module
-      temp_graph =
-        existing_modules
-        |> Enum.reduce(%{}, fn module, acc ->
-          case get_current_module_version(table_name, sandbox_id, module) do
-            nil -> acc
-            {_key, version_data} -> Map.put(acc, module, version_data.dependencies)
-          end
-        end)
-        |> Map.put(new_module, new_dependencies)
+    # Create a temporary dependency graph including the new module
+    temp_graph =
+      existing_modules
+      |> Enum.reduce(%{}, fn module, acc ->
+        case get_current_module_version(table_name, sandbox_id, module) do
+          nil -> acc
+          {_key, version_data} -> Map.put(acc, module, version_data.dependencies)
+        end
+      end)
+      |> Map.put(new_module, new_dependencies)
 
-      # Check for circular dependencies
-      case do_detect_circular_dependencies(temp_graph) do
-        {:ok, :no_cycles} -> :ok
-        {:error, {:circular_dependency, cycles}} -> {:error, cycles}
-      end
-    rescue
-      error ->
-        Logger.warning("Error during circular dependency validation",
-          error: inspect(error)
-        )
-
-        # Allow registration if validation fails - better to be permissive
-        :ok
+    # Check for circular dependencies
+    case do_detect_circular_dependencies(temp_graph) do
+      {:ok, :no_cycles} -> :ok
+      {:error, {:circular_dependency, cycles}} -> {:error, cycles}
     end
+  rescue
+    error ->
+      Logger.warning("Error during circular dependency validation",
+        error: inspect(error)
+      )
+
+      # Allow registration if validation fails - better to be permissive
+      :ok
   end
 
   defp get_sandbox_modules(table_name, sandbox_id) do

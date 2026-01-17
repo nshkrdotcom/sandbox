@@ -30,14 +30,14 @@ defmodule Sandbox.IsolatedCompilerSecurityUnitTest do
       assert {:ok, scan_results} = IsolatedCompiler.scan_code_security(sandbox_dir)
 
       # Should detect threats from restricted modules
-      assert length(scan_results.threats) > 0 or length(scan_results.warnings) > 0
+      assert scan_results.threats != [] or scan_results.warnings != []
 
       # Check that we have some security findings
       all_findings = scan_results.threats ++ scan_results.warnings
-      assert length(all_findings) > 0
+      assert all_findings != []
 
       # Verify findings have proper structure
-      if length(all_findings) > 0 do
+      if all_findings != [] do
         finding = List.first(all_findings)
         assert Map.has_key?(finding, :type)
         assert Map.has_key?(finding, :severity)
@@ -70,7 +70,7 @@ defmodule Sandbox.IsolatedCompilerSecurityUnitTest do
       assert {:ok, scan_results} = IsolatedCompiler.scan_code_security(sandbox_dir)
 
       # Should detect warnings for dangerous operations
-      assert length(scan_results.warnings) > 0
+      assert scan_results.warnings != []
 
       # Check for specific operation types
       operation_types = Enum.map(scan_results.warnings, & &1.operation) |> Enum.uniq()
@@ -84,7 +84,7 @@ defmodule Sandbox.IsolatedCompilerSecurityUnitTest do
       ]
 
       detected_operations = Enum.filter(expected_operations, &(&1 in operation_types))
-      assert length(detected_operations) > 0
+      assert detected_operations != []
     end
 
     test "provides severity levels for different threats", %{sandbox_dir: sandbox_dir} do
@@ -148,7 +148,7 @@ defmodule Sandbox.IsolatedCompilerSecurityUnitTest do
           end
         )
 
-      assert length(restricted_findings) > 0
+      assert restricted_findings != []
     end
 
     test "provides detailed context information", %{sandbox_dir: sandbox_dir} do
@@ -162,7 +162,7 @@ defmodule Sandbox.IsolatedCompilerSecurityUnitTest do
       assert {:ok, scan_results} = IsolatedCompiler.scan_code_security(sandbox_dir)
 
       # Check that findings have detailed context
-      if length(scan_results.warnings) > 0 do
+      if scan_results.warnings != [] do
         warning = List.first(scan_results.warnings)
 
         # Should have context information
@@ -220,7 +220,7 @@ defmodule Sandbox.IsolatedCompilerSecurityUnitTest do
       assert scan_time < 2000
 
       # Should detect some warnings from unsafe operations
-      assert length(scan_results.warnings) > 0
+      assert scan_results.warnings != []
 
       # Should have findings from multiple files
       files_with_findings =
@@ -228,7 +228,7 @@ defmodule Sandbox.IsolatedCompilerSecurityUnitTest do
         |> Enum.map(& &1.file)
         |> Enum.uniq()
 
-      assert length(files_with_findings) > 1
+      assert match?([_, _ | _], files_with_findings)
     end
   end
 
@@ -267,7 +267,7 @@ defmodule Sandbox.IsolatedCompilerSecurityUnitTest do
       assert is_list(opts[:allowed_operations])
 
       # Should have reasonable defaults
-      assert length(opts[:restricted_modules]) > 0
+      assert opts[:restricted_modules] != []
     end
   end
 
@@ -277,8 +277,8 @@ defmodule Sandbox.IsolatedCompilerSecurityUnitTest do
       assert {:ok, scan_results} = IsolatedCompiler.scan_code_security(sandbox_dir)
 
       # Should have empty results
-      assert length(scan_results.threats) == 0
-      assert length(scan_results.warnings) == 0
+      assert scan_results.threats == []
+      assert scan_results.warnings == []
     end
 
     test "handles invalid file content gracefully", %{sandbox_dir: sandbox_dir} do

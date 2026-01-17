@@ -425,7 +425,7 @@ defmodule Sandbox.ManagerLifecycleTest do
           end)
         end)
 
-      results = Task.await_many(tasks, 10000)
+      results = Task.await_many(tasks, 10_000)
 
       # Verify all succeeded
       Enum.each(results, fn result ->
@@ -453,7 +453,7 @@ defmodule Sandbox.ManagerLifecycleTest do
           Task.async(fn -> Manager.destroy_sandbox(sandbox_id, server: manager) end)
         end)
 
-      cleanup_results = Task.await_many(cleanup_tasks, 10000)
+      cleanup_results = Task.await_many(cleanup_tasks, 10_000)
 
       Enum.each(cleanup_results, fn result ->
         assert :ok = result

@@ -30,7 +30,7 @@ defmodule Sandbox.IsolatedCompilerSecurityTest do
       assert {:ok, scan_results} = IsolatedCompiler.scan_code_security(sandbox_dir)
 
       # Should detect threats from restricted modules
-      assert length(scan_results.threats) > 0
+      assert scan_results.threats != []
 
       threat_modules = Enum.map(scan_results.threats, & &1.module)
       assert System in threat_modules or File in threat_modules
@@ -54,7 +54,7 @@ defmodule Sandbox.IsolatedCompilerSecurityTest do
       assert {:ok, scan_results} = IsolatedCompiler.scan_code_security(sandbox_dir)
 
       # Should detect warnings for dangerous operations
-      assert length(scan_results.warnings) > 0
+      assert scan_results.warnings != []
 
       warning_types = Enum.map(scan_results.warnings, & &1.type)
       assert :dangerous_operation in warning_types or :network_access in warning_types
@@ -81,7 +81,7 @@ defmodule Sandbox.IsolatedCompilerSecurityTest do
       unauthorized_warnings =
         Enum.filter(scan_results.warnings, &(&1.type == :unauthorized_operation))
 
-      assert length(unauthorized_warnings) > 0
+      assert unauthorized_warnings != []
     end
 
     test "provides detailed security report with line numbers", %{sandbox_dir: sandbox_dir} do
@@ -96,7 +96,7 @@ defmodule Sandbox.IsolatedCompilerSecurityTest do
 
       # Check that line numbers are correctly reported
       warnings_with_lines = Enum.filter(scan_results.warnings, &(&1.line > 0))
-      assert length(warnings_with_lines) > 0
+      assert warnings_with_lines != []
 
       # Verify specific line numbers for known dangerous operations
       system_warnings =
@@ -105,7 +105,7 @@ defmodule Sandbox.IsolatedCompilerSecurityTest do
           &(&1.operation == :system_command or &1.type == :dangerous_operation)
         )
 
-      if length(system_warnings) > 0 do
+      if system_warnings != [] do
         system_warning = List.first(system_warnings)
         # System.cmd is on line 3 (after defmodule and indentation)
         assert system_warning.line == 3
@@ -118,7 +118,7 @@ defmodule Sandbox.IsolatedCompilerSecurityTest do
           &(&1.type == :file_access)
         )
 
-      if length(file_warnings) > 0 do
+      if file_warnings != [] do
         file_warning = List.first(file_warnings)
         # File.read is on line 5
         assert file_warning.line == 5
@@ -229,7 +229,7 @@ defmodule Sandbox.IsolatedCompilerSecurityTest do
       create_sample_module(sandbox_dir, module_name, "def valid_func, do: :ok")
 
       assert {:ok, compile_info} = IsolatedCompiler.compile_sandbox(sandbox_dir)
-      assert length(compile_info.beam_files) > 0
+      assert compile_info.beam_files != []
 
       # Validate the generated BEAM files
       assert :ok = IsolatedCompiler.validate_beam_files(compile_info.beam_files)
@@ -269,7 +269,7 @@ defmodule Sandbox.IsolatedCompilerSecurityTest do
 
       case result do
         {:error, {:security_threats_detected, threats}} ->
-          assert length(threats) > 0
+          assert threats != []
 
         {:ok, _} ->
           # If compilation succeeded, security scan might have only found warnings
@@ -298,7 +298,7 @@ defmodule Sandbox.IsolatedCompilerSecurityTest do
                  security_scan: true
                )
 
-      assert length(compile_info.beam_files) > 0
+      assert compile_info.beam_files != []
       assert compile_info.compilation_time > 0
     end
 
@@ -322,8 +322,8 @@ defmodule Sandbox.IsolatedCompilerSecurityTest do
       assert {:ok, scan_results} = IsolatedCompiler.scan_code_security(sandbox_dir)
 
       # Should have warnings but not threats
-      assert length(scan_results.warnings) > 0
-      assert length(scan_results.threats) == 0
+      assert scan_results.warnings != []
+      assert scan_results.threats == []
     end
   end
 
@@ -447,10 +447,10 @@ defmodule Sandbox.IsolatedCompilerSecurityTest do
       critical_threats = Enum.filter(scan_results.warnings, &(&1.severity == :critical))
       high_threats = Enum.filter(scan_results.warnings, &(&1.severity == :high))
 
-      assert length(critical_threats) + length(high_threats) > 0
+      assert critical_threats != [] or high_threats != []
 
       # Check for detailed context information
-      if length(scan_results.warnings) > 0 do
+      if scan_results.warnings != [] do
         warning = List.first(scan_results.warnings)
         assert Map.has_key?(warning, :context)
         assert Map.has_key?(warning, :line_content)
@@ -498,7 +498,7 @@ defmodule Sandbox.IsolatedCompilerSecurityTest do
 
       # Should detect multiple categories
       detected_categories = Enum.filter(expected_categories, &(&1 in operation_types))
-      assert length(detected_categories) > 0
+      assert detected_categories != []
     end
 
     test "respects configurable security rules", %{sandbox_dir: sandbox_dir} do
@@ -530,7 +530,7 @@ defmodule Sandbox.IsolatedCompilerSecurityTest do
           &(&1.type == :unauthorized_operation or &1.type == :dangerous_operation)
         )
 
-      assert length(restricted_warnings) > 0
+      assert restricted_warnings != []
     end
   end
 
@@ -551,7 +551,7 @@ defmodule Sandbox.IsolatedCompilerSecurityTest do
                  restricted_modules: [:os, :file, :code, :erlang, File, Code, Port]
                )
 
-      assert length(compile_info.beam_files) > 0
+      assert compile_info.beam_files != []
     end
 
     test "validates sandbox path safety", %{sandbox_dir: _sandbox_dir} do
@@ -597,7 +597,7 @@ defmodule Sandbox.IsolatedCompilerSecurityTest do
         )
 
       # Should not have security warnings for normal code
-      assert length(security_warnings) == 0
+      assert security_warnings == []
     end
   end
 
@@ -638,7 +638,7 @@ defmodule Sandbox.IsolatedCompilerSecurityTest do
       assert scan_time < 5000
 
       # Should detect some warnings from unsafe operations
-      assert length(scan_results.warnings) > 0
+      assert scan_results.warnings != []
     end
 
     @tag :stress

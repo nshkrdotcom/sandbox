@@ -1,4 +1,5 @@
 defmodule Sandbox.TestHelpers do
+  @moduledoc false
   import ExUnit.Assertions
 
   def unique_id(prefix) when is_binary(prefix) do
@@ -55,17 +56,12 @@ defmodule Sandbox.TestHelpers do
 
     # Ensure tables are cleaned up after processes stop.
     Supertester.OTPHelpers.cleanup_on_exit(fn ->
-      [
+      cleanup_ets_tables([
         table_names.sandboxes,
         table_names.sandbox_monitors,
         table_names.module_versions,
         table_names.isolation_contexts
-      ]
-      |> Enum.each(fn table ->
-        if :ets.whereis(table) != :undefined do
-          :ets.delete(table)
-        end
-      end)
+      ])
     end)
 
     {:ok, mvm_pid} =
@@ -236,6 +232,16 @@ defmodule Sandbox.TestHelpers do
 
           do_await(fun, deadline, interval, description)
         end
+    end
+  end
+
+  defp cleanup_ets_tables(tables) do
+    Enum.each(tables, &delete_ets_table_if_exists/1)
+  end
+
+  defp delete_ets_table_if_exists(table) do
+    if :ets.whereis(table) != :undefined do
+      :ets.delete(table)
     end
   end
 end

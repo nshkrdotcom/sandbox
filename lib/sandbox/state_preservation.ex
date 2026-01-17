@@ -392,27 +392,25 @@ defmodule Sandbox.StatePreservation do
   end
 
   defp do_validate_state_compatibility(old_state, new_state) do
-    try do
-      # Basic type compatibility check
-      if not compatible_types?(old_state, new_state) do
-        {:error, :type_mismatch}
-      else
-        # Structural compatibility check for maps and tuples
-        case {old_state, new_state} do
-          {old_map, new_map} when is_map(old_map) and is_map(new_map) ->
-            validate_map_compatibility(old_map, new_map)
+    # Basic type compatibility check
+    if compatible_types?(old_state, new_state) do
+      # Structural compatibility check for maps and tuples
+      case {old_state, new_state} do
+        {old_map, new_map} when is_map(old_map) and is_map(new_map) ->
+          validate_map_compatibility(old_map, new_map)
 
-          {old_tuple, new_tuple} when is_tuple(old_tuple) and is_tuple(new_tuple) ->
-            validate_tuple_compatibility(old_tuple, new_tuple)
+        {old_tuple, new_tuple} when is_tuple(old_tuple) and is_tuple(new_tuple) ->
+          validate_tuple_compatibility(old_tuple, new_tuple)
 
-          _ ->
-            {:ok, :compatible}
-        end
+        _ ->
+          {:ok, :compatible}
       end
-    rescue
-      error ->
-        {:error, {:validation_error, error}}
+    else
+      {:error, :type_mismatch}
     end
+  rescue
+    error ->
+      {:error, {:validation_error, error}}
   end
 
   defp do_migrate_supervisor_specs(supervisor_pid, new_module, opts) do
@@ -468,38 +466,36 @@ defmodule Sandbox.StatePreservation do
   end
 
   defp do_preserve_and_restore(module, old_version, new_version, opts) do
-    try do
-      # Step 1: Capture states
-      case do_capture_module_states(module, opts) do
-        {:ok, captured_states} ->
-          Logger.debug("Captured #{length(captured_states)} states for module #{module}")
+    # Step 1: Capture states
+    case do_capture_module_states(module, opts) do
+      {:ok, captured_states} ->
+        Logger.debug("Captured #{length(captured_states)} states for module #{module}")
 
-          # Step 2: Restore states after hot-reload
-          case do_restore_states(captured_states, old_version, new_version, opts) do
-            {:ok, :restored} ->
-              Logger.info("Completed state preservation cycle",
-                module: module,
-                processes: length(captured_states)
-              )
+        # Step 2: Restore states after hot-reload
+        case do_restore_states(captured_states, old_version, new_version, opts) do
+          {:ok, :restored} ->
+            Logger.info("Completed state preservation cycle",
+              module: module,
+              processes: length(captured_states)
+            )
 
-              {:ok, :completed}
+            {:ok, :completed}
 
-            {:error, reason} ->
-              {:error, reason}
-          end
+          {:error, reason} ->
+            {:error, reason}
+        end
 
-        {:error, reason} ->
-          {:error, reason}
-      end
-    rescue
-      error ->
-        Logger.error("State preservation cycle failed",
-          module: module,
-          error: inspect(error)
-        )
-
-        {:error, {:preservation_cycle_failed, error}}
+      {:error, reason} ->
+        {:error, reason}
     end
+  rescue
+    error ->
+      Logger.error("State preservation cycle failed",
+        module: module,
+        error: inspect(error)
+      )
+
+      {:error, {:preservation_cycle_failed, error}}
   end
 
   # Helper functions
@@ -517,48 +513,43 @@ defmodule Sandbox.StatePreservation do
   end
 
   defp get_process_info(pid) do
-    try do
-      info_keys = [
-        :current_function,
-        :initial_call,
-        :dictionary,
-        :registered_name,
-        :links,
-        :monitors
-      ]
+    info_keys = [
+      :current_function,
+      :initial_call,
+      :dictionary,
+      :registered_name,
+      :links,
+      :monitors
+    ]
 
-      info_keys
-      |> Enum.map(fn key -> {key, Process.info(pid, key)} end)
-      |> Enum.reject(fn {_key, value} -> is_nil(value) end)
-      |> Map.new()
-    rescue
-      _ -> %{}
-    end
+    info_keys
+    |> Enum.map(fn key -> {key, Process.info(pid, key)} end)
+    |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+    |> Map.new()
+  rescue
+    _ -> %{}
   end
 
   defp determine_process_module(_pid, process_info) do
     # Try multiple methods to determine the module, prioritizing GenServer callback modules
-    cond do
-      # Check process dictionary for GenServer callback module (most reliable for GenServers)
-      true ->
-        case Map.get(process_info, :dictionary) do
-          {:dictionary, dict} ->
-            case Keyword.get(dict, :"$initial_call") do
-              # GenServer callback module
-              {module, :init, 1} ->
-                module
+    # Check process dictionary for GenServer callback module (most reliable for GenServers)
+    case Map.get(process_info, :dictionary) do
+      {:dictionary, dict} ->
+        case Keyword.get(dict, :"$initial_call") do
+          # GenServer callback module
+          {module, :init, 1} ->
+            module
 
-              {module, _func, _arity} ->
-                module
-
-              _ ->
-                # Fallback to other methods
-                determine_module_fallback(process_info)
-            end
+          {module, _func, _arity} ->
+            module
 
           _ ->
+            # Fallback to other methods
             determine_module_fallback(process_info)
         end
+
+      _ ->
+        determine_module_fallback(process_info)
     end
   end
 
@@ -583,72 +574,57 @@ defmodule Sandbox.StatePreservation do
   end
 
   defp capture_sys_state(pid, timeout) do
-    try do
-      :sys.get_state(pid, timeout)
-    rescue
-      _ -> nil
-    catch
-      :exit, _ -> nil
-    end
+    :sys.get_state(pid, timeout)
+  rescue
+    _ -> nil
+  catch
+    :exit, _ -> nil
   end
 
   defp get_supervisor_info(pid) do
-    try do
-      # Check if this process is supervised
-      case Process.info(pid, :links) do
-        {:links, links} ->
-          supervisor_pids =
-            links
-            |> Enum.filter(fn linked_pid ->
-              try do
-                # Check multiple ways to detect supervisors
-                case Process.info(linked_pid, :dictionary) do
-                  {:dictionary, dict} ->
-                    # Check for $initial_call
-                    initial_call = Keyword.get(dict, :"$initial_call")
-                    _ancestors = Keyword.get(dict, :"$ancestors", [])
+    # Check if this process is supervised
+    case Process.info(pid, :links) do
+      {:links, links} ->
+        supervisor_pids = Enum.filter(links, &supervisor_process?/1)
+        build_supervisor_info(supervisor_pids, pid)
 
-                    # Also check if it's in supervisor tree
-                    case initial_call do
-                      {Supervisor, _, _} -> true
-                      {:supervisor, _, _} -> true
-                      _ -> false
-                    end
-
-                  _ ->
-                    false
-                end
-              rescue
-                _ -> false
-              end
-            end)
-
-          case supervisor_pids do
-            [supervisor_pid | _] ->
-              %{
-                supervisor_pid: supervisor_pid,
-                child_spec: get_child_spec(supervisor_pid, pid)
-              }
-
-            [] ->
-              nil
-          end
-
-        _ ->
-          nil
-      end
-    rescue
-      _ -> nil
+      _ ->
+        nil
     end
+  rescue
+    _ -> nil
   end
 
-  defp get_child_spec(supervisor_pid, child_pid) do
-    try do
-      Supervisor.which_children(supervisor_pid)
-      |> Enum.find(fn {_id, pid, _type, _modules} -> pid == child_pid end)
-    rescue
-      _ -> nil
+  defp supervisor_process?(linked_pid) do
+    case Process.info(linked_pid, :dictionary) do
+      {:dictionary, dict} ->
+        supervisor_initial_call?(Keyword.get(dict, :"$initial_call"))
+
+      _ ->
+        false
     end
+  rescue
+    _ -> false
+  end
+
+  defp supervisor_initial_call?({Supervisor, _, _}), do: true
+  defp supervisor_initial_call?({:supervisor, _, _}), do: true
+  defp supervisor_initial_call?(_), do: false
+
+  defp build_supervisor_info([supervisor_pid | _], pid) do
+    %{
+      supervisor_pid: supervisor_pid,
+      child_spec: get_child_spec(supervisor_pid, pid)
+    }
+  end
+
+  defp build_supervisor_info([], _pid), do: nil
+
+  defp get_child_spec(supervisor_pid, child_pid) do
+    Supervisor.which_children(supervisor_pid)
+    |> Enum.find(fn {_id, pid, _type, _modules} -> pid == child_pid end)
+  rescue
+    _ -> nil
   end
 
   defp apply_default_migration(state, _old_version, _new_version) do
@@ -659,19 +635,19 @@ defmodule Sandbox.StatePreservation do
 
   defp compatible_types?(old_state, new_state) do
     # Check if the basic types are compatible
-    case {old_state, new_state} do
-      {nil, nil} -> true
-      {old, new} when is_atom(old) and is_atom(new) -> true
-      {old, new} when is_number(old) and is_number(new) -> true
-      {old, new} when is_binary(old) and is_binary(new) -> true
-      {old, new} when is_list(old) and is_list(new) -> true
-      {old, new} when is_map(old) and is_map(new) -> true
-      {old, new} when is_tuple(old) and is_tuple(new) -> true
-      {old, new} when is_pid(old) and is_pid(new) -> true
-      {old, new} when is_reference(old) and is_reference(new) -> true
-      _ -> false
-    end
+    type_tag(old_state) == type_tag(new_state)
   end
+
+  defp type_tag(nil), do: :nil_type
+  defp type_tag(x) when is_atom(x), do: :atom
+  defp type_tag(x) when is_number(x), do: :number
+  defp type_tag(x) when is_binary(x), do: :binary
+  defp type_tag(x) when is_list(x), do: :list
+  defp type_tag(x) when is_map(x), do: :map
+  defp type_tag(x) when is_tuple(x), do: :tuple
+  defp type_tag(x) when is_pid(x), do: :pid
+  defp type_tag(x) when is_reference(x), do: :reference
+  defp type_tag(_), do: :other
 
   defp validate_map_compatibility(old_map, new_map) do
     # Check if all required keys from old map exist in new map
@@ -699,49 +675,45 @@ defmodule Sandbox.StatePreservation do
   end
 
   defp replace_process_state(pid, new_state) do
-    try do
-      case :sys.replace_state(pid, fn _old_state -> new_state end) do
-        ^new_state -> :ok
-        _ -> {:error, :replacement_failed}
-      end
-    rescue
-      error -> {:error, {:sys_error, error}}
-    catch
-      :exit, reason -> {:error, {:process_exit, reason}}
+    case :sys.replace_state(pid, fn _old_state -> new_state end) do
+      ^new_state -> :ok
+      _ -> {:error, :replacement_failed}
     end
+  rescue
+    error -> {:error, {:sys_error, error}}
+  catch
+    :exit, reason -> {:error, {:process_exit, reason}}
   end
 
   defp update_child_spec(supervisor_pid, child_id, child_pid, _new_module, _type) do
-    try do
-      # This is a simplified approach - in practice, you might need more sophisticated
-      # child spec updating depending on your supervisor setup
+    # This is a simplified approach - in practice, you might need more sophisticated
+    # child spec updating depending on your supervisor setup
 
-      # First, terminate the child if it's running
-      if Process.alive?(child_pid) do
-        case Supervisor.terminate_child(supervisor_pid, child_id) do
-          :ok ->
-            # Now restart the child with the new module
-            case Supervisor.restart_child(supervisor_pid, child_id) do
-              {:ok, _new_pid} -> :ok
-              {:ok, _new_pid, _info} -> :ok
-              {:error, reason} -> {:error, {:restart_failed, reason}}
-            end
+    # First, terminate the child if it's running
+    if Process.alive?(child_pid) do
+      terminate_and_restart_child(supervisor_pid, child_id)
+    else
+      # Child is not running, just restart it
+      restart_child(supervisor_pid, child_id)
+    end
+  rescue
+    error -> {:error, {:update_failed, error}}
+  end
 
-          {:error, reason} ->
-            {:error, {:terminate_failed, reason}}
-        end
-      else
-        # Child is not running, just restart it
-        case Supervisor.restart_child(supervisor_pid, child_id) do
-          {:ok, _new_pid} -> :ok
-          {:ok, _new_pid, _info} -> :ok
-          # Child was already removed
-          {:error, :not_found} -> :ok
-          {:error, reason} -> {:error, {:restart_failed, reason}}
-        end
-      end
-    rescue
-      error -> {:error, {:update_failed, error}}
+  defp terminate_and_restart_child(supervisor_pid, child_id) do
+    case Supervisor.terminate_child(supervisor_pid, child_id) do
+      :ok -> restart_child(supervisor_pid, child_id)
+      {:error, reason} -> {:error, {:terminate_failed, reason}}
+    end
+  end
+
+  defp restart_child(supervisor_pid, child_id) do
+    case Supervisor.restart_child(supervisor_pid, child_id) do
+      {:ok, _new_pid} -> :ok
+      {:ok, _new_pid, _info} -> :ok
+      # Child was already removed
+      {:error, :not_found} -> :ok
+      {:error, reason} -> {:error, {:restart_failed, reason}}
     end
   end
 

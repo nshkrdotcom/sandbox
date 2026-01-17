@@ -94,7 +94,7 @@ defmodule Sandbox.ModuleVersionManagerDependencyTest do
                  server: manager
                )
 
-      assert length(cycles) > 0
+      assert cycles != []
     end
 
     test "detects complex circular dependency", %{manager: manager} do
@@ -109,7 +109,7 @@ defmodule Sandbox.ModuleVersionManagerDependencyTest do
                  server: manager
                )
 
-      assert length(cycles) > 0
+      assert cycles != []
     end
 
     test "returns no cycles for acyclic graph", %{manager: manager} do

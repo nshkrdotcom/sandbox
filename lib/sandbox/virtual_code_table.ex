@@ -215,23 +215,25 @@ defmodule Sandbox.VirtualCodeTable do
       _table_ref ->
         modules =
           :ets.tab2list(table_name)
-          |> Enum.map(fn {module, info} ->
-            base_info = %{
-              name: module,
-              loaded_at: info.loaded_at,
-              size: info.size,
-              checksum: info.checksum
-            }
-
-            if include_metadata do
-              Map.put(base_info, :metadata, info.metadata)
-            else
-              base_info
-            end
-          end)
+          |> Enum.map(fn {module, info} -> format_module_info(module, info, include_metadata) end)
           |> sort_modules(sort_by)
 
         {:ok, modules}
+    end
+  end
+
+  defp format_module_info(module, info, include_metadata) do
+    base_info = %{
+      name: module,
+      loaded_at: info.loaded_at,
+      size: info.size,
+      checksum: info.checksum
+    }
+
+    if include_metadata do
+      Map.put(base_info, :metadata, info.metadata)
+    else
+      base_info
     end
   end
 
@@ -357,38 +359,41 @@ defmodule Sandbox.VirtualCodeTable do
   end
 
   defp extract_module_metadata(beam_data) do
-    try do
-      case :beam_lib.info(beam_data) do
-        info when is_list(info) ->
-          %{
-            attributes:
-              case Keyword.get(info, :attributes) do
-                attrs when is_list(attrs) -> Map.new(attrs)
-                _ -> %{}
-              end,
-            exports:
-              case Keyword.get(info, :exports) do
-                exports when is_list(exports) -> exports
-                _ -> []
-              end,
-            imports:
-              case Keyword.get(info, :imports) do
-                imports when is_list(imports) -> imports
-                _ -> []
-              end,
-            compile_info:
-              case Keyword.get(info, :compile) do
-                compile when is_list(compile) -> Map.new(compile)
-                _ -> %{}
-              end
-          }
+    case :beam_lib.info(beam_data) do
+      info when is_list(info) ->
+        %{
+          attributes: extract_attributes(info),
+          exports: extract_list_field(info, :exports),
+          imports: extract_list_field(info, :imports),
+          compile_info: extract_compile_info(info)
+        }
 
-        {:error, :beam_lib, _reason} ->
-          %{}
-      end
-    rescue
-      _ ->
+      {:error, :beam_lib, _reason} ->
         %{}
+    end
+  rescue
+    _ ->
+      %{}
+  end
+
+  defp extract_attributes(info) do
+    case Keyword.get(info, :attributes) do
+      attrs when is_list(attrs) -> Map.new(attrs)
+      _ -> %{}
+    end
+  end
+
+  defp extract_list_field(info, field) do
+    case Keyword.get(info, field) do
+      value when is_list(value) -> value
+      _ -> []
+    end
+  end
+
+  defp extract_compile_info(info) do
+    case Keyword.get(info, :compile) do
+      compile when is_list(compile) -> Map.new(compile)
+      _ -> %{}
     end
   end
 

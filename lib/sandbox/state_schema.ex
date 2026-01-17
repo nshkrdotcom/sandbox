@@ -244,18 +244,19 @@ defmodule Sandbox.StateSchema do
   def apply_defaults(state, schema) when is_map(state) do
     schema.fields
     |> Enum.reduce(state, fn {field_name, field_spec}, acc ->
-      if Map.has_key?(acc, field_name) do
-        acc
-      else
-        case field_spec.default do
-          nil -> acc
-          default_value -> Map.put(acc, field_name, default_value)
-        end
-      end
+      maybe_apply_default(acc, field_name, field_spec.default)
     end)
   end
 
   def apply_defaults(state, _schema), do: state
+
+  defp maybe_apply_default(state, field_name, default_value) do
+    if Map.has_key?(state, field_name) or is_nil(default_value) do
+      state
+    else
+      Map.put(state, field_name, default_value)
+    end
+  end
 
   # Private helper functions
 
@@ -392,12 +393,10 @@ defmodule Sandbox.StateSchema do
   end
 
   defp apply_transformation(state, transformation) do
-    try do
-      new_state = transformation.transform_fn.(state)
-      {:ok, new_state}
-    rescue
-      error ->
-        {:error, :migration_failed, "Transformation failed: #{inspect(error)}"}
-    end
+    new_state = transformation.transform_fn.(state)
+    {:ok, new_state}
+  rescue
+    error ->
+      {:error, :migration_failed, "Transformation failed: #{inspect(error)}"}
   end
 end

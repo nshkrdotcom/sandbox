@@ -427,7 +427,7 @@ defmodule Sandbox.IsolatedCompilerPerformanceTest do
     # Create modules that depend on dependent modules
     for i <- 1..3 do
       deps = Enum.map(1..3, fn j -> "DependentModule#{j}" end)
-      aliases = Enum.map(deps, fn dep -> "alias #{dep}" end) |> Enum.join("\n  ")
+      aliases = Enum.map_join(deps, "\n  ", fn dep -> "alias #{dep}" end)
 
       content = """
       #{aliases}

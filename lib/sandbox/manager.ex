@@ -13,13 +13,13 @@ defmodule Sandbox.Manager do
   use GenServer
   require Logger
 
+  alias Sandbox.Config
   alias Sandbox.IsolatedCompiler
-  alias Sandbox.ModuleVersionManager
+  alias Sandbox.Models.SandboxState
   alias Sandbox.ModuleTransformer
+  alias Sandbox.ModuleVersionManager
   alias Sandbox.ProcessIsolator
   alias Sandbox.VirtualCodeTable
-  alias Sandbox.Models.SandboxState
-  alias Sandbox.Config
 
   # Public API
 
@@ -529,20 +529,23 @@ defmodule Sandbox.Manager do
         {:error, {:sandbox_invalid_mix_file, "mix.exs must be a regular file: #{mix_file}"}}
 
       true ->
-        case File.read(mix_file) do
-          {:ok, content} ->
-            if String.contains?(content, "defmodule") and String.contains?(content, "MixProject") do
-              :ok
-            else
-              {:error,
-               {:sandbox_invalid_mix_content,
-                "mix.exs does not appear to contain a valid Mix project definition"}}
-            end
+        validate_mix_project_content(mix_file)
+    end
+  end
 
-          {:error, reason} ->
-            {:error,
-             {:sandbox_mix_file_unreadable, "cannot read mix.exs file: #{inspect(reason)}"}}
+  defp validate_mix_project_content(mix_file) do
+    case File.read(mix_file) do
+      {:ok, content} ->
+        if String.contains?(content, "defmodule") and String.contains?(content, "MixProject") do
+          :ok
+        else
+          {:error,
+           {:sandbox_invalid_mix_content,
+            "mix.exs does not appear to contain a valid Mix project definition"}}
         end
+
+      {:error, reason} ->
+        {:error, {:sandbox_mix_file_unreadable, "cannot read mix.exs file: #{inspect(reason)}"}}
     end
   end
 
@@ -672,7 +675,7 @@ defmodule Sandbox.Manager do
   defp validate_process_limit(nil, errors), do: errors
 
   defp validate_process_limit(value, errors) when is_integer(value) and value > 0 do
-    if value > 10000 do
+    if value > 10_000 do
       [{:max_processes_too_large, "max_processes must be at most 10000, got: #{value}"} | errors]
     else
       errors
@@ -699,7 +702,7 @@ defmodule Sandbox.Manager do
         ]
 
       # More than 1 hour
-      value > 3600_000 ->
+      value > 3_600_000 ->
         [
           {:max_execution_time_too_large,
            "max_execution_time must be at most 3600000ms (1 hour), got: #{value}"}
@@ -800,16 +803,7 @@ defmodule Sandbox.Manager do
   defp validate_security_profile(opts) do
     case Keyword.get(opts, :security_profile, :medium) do
       profile_name when is_atom(profile_name) ->
-        case get_security_profile(profile_name) do
-          {:ok, profile} ->
-            case validate_security_profile_consistency(profile) do
-              :ok -> {:ok, profile}
-              {:error, reason} -> {:error, reason}
-            end
-
-          {:error, reason} ->
-            {:error, reason}
-        end
+        validate_named_security_profile(profile_name)
 
       custom_profile when is_map(custom_profile) ->
         validate_custom_security_profile(custom_profile)
@@ -818,6 +812,19 @@ defmodule Sandbox.Manager do
         {:error,
          {:invalid_security_profile_type,
           "security_profile must be an atom (:high, :medium, :low) or a custom profile map, got: #{inspect(invalid)}"}}
+    end
+  end
+
+  defp validate_named_security_profile(profile_name) do
+    case get_security_profile(profile_name) do
+      {:ok, profile} ->
+        case validate_security_profile_consistency(profile) do
+          :ok -> {:ok, profile}
+          {:error, reason} -> {:error, reason}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
@@ -1019,26 +1026,28 @@ defmodule Sandbox.Manager do
     # High isolation should not allow dangerous operations
     case level do
       :high ->
-        cond do
-          :all in ops ->
-            {:error,
-             {:security_profile_inconsistent, "high isolation level cannot allow :all operations"}}
-
-          true ->
-            dangerous_ops = [:file_write, :network_server, :crypto]
-            allowed_dangerous = Enum.filter(dangerous_ops, &(&1 in ops))
-
-            if length(allowed_dangerous) > 0 do
-              {:error,
-               {:security_profile_inconsistent,
-                "high isolation level should not allow dangerous operations: #{inspect(allowed_dangerous)}"}}
-            else
-              :ok
-            end
-        end
+        validate_high_isolation_operations(ops)
 
       _ ->
         :ok
+    end
+  end
+
+  defp validate_high_isolation_operations(ops) do
+    if :all in ops do
+      {:error,
+       {:security_profile_inconsistent, "high isolation level cannot allow :all operations"}}
+    else
+      dangerous_ops = [:file_write, :network_server, :crypto]
+      allowed_dangerous = Enum.filter(dangerous_ops, &(&1 in ops))
+
+      if allowed_dangerous != [] do
+        {:error,
+         {:security_profile_inconsistent,
+          "high isolation level should not allow dangerous operations: #{inspect(allowed_dangerous)}"}}
+      else
+        :ok
+      end
     end
   end
 
@@ -1134,9 +1143,9 @@ defmodule Sandbox.Manager do
 
   defp start_with_process_isolation(sandbox_state, services, table_prefixes) do
     %SandboxState{
-      id: sandbox_id,
-      app_name: app_name,
-      supervisor_module: supervisor_module,
+      id: _sandbox_id,
+      app_name: _app_name,
+      supervisor_module: _supervisor_module,
       config: config
     } = sandbox_state
 
@@ -1148,66 +1157,93 @@ defmodule Sandbox.Manager do
 
       _sandbox_path ->
         # Apply module transformation first, then process isolation
-        case start_sandbox_application(
-               sandbox_id,
-               app_name,
-               supervisor_module,
-               Map.to_list(config),
-               services,
-               table_prefixes
-             ) do
-          {:ok, app_pid, supervisor_pid, full_opts} ->
-            # Also create isolated process context for additional isolation
-            isolation_opts = [
-              isolation_level: Map.get(config, :isolation_level, :medium),
-              communication_mode: Map.get(config, :communication_mode, :message_passing),
-              resource_limits: Map.get(config, :resource_limits, %{})
-            ]
+        start_process_isolation_with_compilation(sandbox_state, services, table_prefixes)
+    end
+  end
 
-            # Create additional process isolation context
-            isolation_result =
-              ProcessIsolator.create_isolated_context(
-                "#{sandbox_id}_process_wrapper",
-                supervisor_module,
-                Keyword.put(isolation_opts, :server, services.process_isolator)
-              )
+  defp start_process_isolation_with_compilation(sandbox_state, services, table_prefixes) do
+    %SandboxState{
+      id: sandbox_id,
+      app_name: app_name,
+      supervisor_module: supervisor_module,
+      config: config
+    } = sandbox_state
 
-            # Set up comprehensive process monitoring
-            monitor_ref = Process.monitor(supervisor_pid)
+    case start_sandbox_application(
+           sandbox_id,
+           app_name,
+           supervisor_module,
+           Map.to_list(config),
+           services,
+           table_prefixes
+         ) do
+      {:ok, app_pid, supervisor_pid, full_opts} ->
+        finalize_process_isolation(sandbox_state, services, app_pid, supervisor_pid, full_opts)
 
-            # Extract compile info to track sandbox directory for cleanup
-            compile_info = Keyword.get(full_opts, :compile_info, %{})
-            sandbox_path = Keyword.get(full_opts, :sandbox_path)
+      {:error, reason} ->
+        SandboxState.update_status(sandbox_state, :error)
+        {:error, {:process_isolation_failed, reason}}
+    end
+  end
 
-            # Build list of artifacts including the unique sandbox directory
-            artifacts =
-              if sandbox_path && String.starts_with?(sandbox_path, System.tmp_dir!()) do
-                [sandbox_path | Map.get(compile_info, :beam_files, [])]
-              else
-                Map.get(compile_info, :beam_files, [])
-              end
+  defp finalize_process_isolation(sandbox_state, services, app_pid, supervisor_pid, full_opts) do
+    %SandboxState{
+      id: sandbox_id,
+      supervisor_module: supervisor_module,
+      config: config
+    } = sandbox_state
 
-            # Update sandbox state with process isolation information
-            updated_state =
-              sandbox_state
-              |> SandboxState.update_processes(app_pid, supervisor_pid, monitor_ref)
-              |> SandboxState.update_status(:running)
-              |> Map.put(:compilation_artifacts, artifacts)
-              |> Map.put(:isolation_mode, :process)
-              |> Map.put(
-                :isolation_context,
-                case isolation_result do
-                  {:ok, context} -> context
-                  {:error, _} -> nil
-                end
-              )
+    # Also create isolated process context for additional isolation
+    isolation_opts = [
+      isolation_level: Map.get(config, :isolation_level, :medium),
+      communication_mode: Map.get(config, :communication_mode, :message_passing),
+      resource_limits: Map.get(config, :resource_limits, %{})
+    ]
 
-            {:ok, updated_state, monitor_ref}
+    # Create additional process isolation context
+    isolation_result =
+      ProcessIsolator.create_isolated_context(
+        "#{sandbox_id}_process_wrapper",
+        supervisor_module,
+        Keyword.put(isolation_opts, :server, services.process_isolator)
+      )
 
-          {:error, reason} ->
-            SandboxState.update_status(sandbox_state, :error)
-            {:error, {:process_isolation_failed, reason}}
-        end
+    # Set up comprehensive process monitoring
+    monitor_ref = Process.monitor(supervisor_pid)
+
+    # Extract compile info to track sandbox directory for cleanup
+    compile_info = Keyword.get(full_opts, :compile_info, %{})
+    sandbox_path = Keyword.get(full_opts, :sandbox_path)
+
+    # Build list of artifacts including the unique sandbox directory
+    artifacts = build_compilation_artifacts(sandbox_path, compile_info)
+
+    # Update sandbox state with process isolation information
+    isolation_context = extract_isolation_context(isolation_result)
+
+    updated_state =
+      sandbox_state
+      |> SandboxState.update_processes(app_pid, supervisor_pid, monitor_ref)
+      |> SandboxState.update_status(:running)
+      |> Map.put(:compilation_artifacts, artifacts)
+      |> Map.put(:isolation_mode, :process)
+      |> Map.put(:isolation_context, isolation_context)
+
+    {:ok, updated_state, monitor_ref}
+  end
+
+  defp build_compilation_artifacts(sandbox_path, compile_info) do
+    if sandbox_path && String.starts_with?(sandbox_path, System.tmp_dir!()) do
+      [sandbox_path | Map.get(compile_info, :beam_files, [])]
+    else
+      Map.get(compile_info, :beam_files, [])
+    end
+  end
+
+  defp extract_isolation_context(isolation_result) do
+    case isolation_result do
+      {:ok, context} -> context
+      {:error, _} -> nil
     end
   end
 
@@ -1375,9 +1411,9 @@ defmodule Sandbox.Manager do
 
   defp start_with_ets_isolation(sandbox_state, services, table_prefixes) do
     %SandboxState{
-      id: sandbox_id,
-      app_name: app_name,
-      supervisor_module: supervisor_module,
+      id: _sandbox_id,
+      app_name: _app_name,
+      supervisor_module: _supervisor_module,
       config: config
     } = sandbox_state
 
@@ -1389,60 +1425,85 @@ defmodule Sandbox.Manager do
 
       _sandbox_path ->
         # Apply module transformation, compile to ETS table, then start supervisor
-        case create_ets_virtual_code_table(sandbox_state, table_prefixes) do
-          {:ok, table_ref, updated_state} ->
-            # Start sandbox application with ETS-based module loading
-            case start_sandbox_application_with_ets(
-                   sandbox_id,
-                   app_name,
-                   supervisor_module,
-                   Map.to_list(config),
-                   table_ref,
-                   services,
-                   table_prefixes
-                 ) do
-              {:ok, app_pid, supervisor_pid, full_opts} ->
-                # Set up monitoring
-                monitor_ref = Process.monitor(supervisor_pid)
-
-                # Extract compile info
-                compile_info = Keyword.get(full_opts, :compile_info, %{})
-                sandbox_path = Keyword.get(full_opts, :sandbox_path)
-
-                # Build artifacts list
-                artifacts =
-                  if sandbox_path && String.starts_with?(sandbox_path, System.tmp_dir!()) do
-                    [sandbox_path | Map.get(compile_info, :beam_files, [])]
-                  else
-                    Map.get(compile_info, :beam_files, [])
-                  end
-
-                # Update sandbox state
-                final_state =
-                  updated_state
-                  |> SandboxState.update_processes(app_pid, supervisor_pid, monitor_ref)
-                  |> SandboxState.update_status(:running)
-                  |> Map.put(:compilation_artifacts, artifacts)
-                  |> Map.put(:isolation_mode, :ets)
-                  |> Map.put(:virtual_code_table, table_ref)
-
-                {:ok, final_state, monitor_ref}
-
-              {:error, reason} ->
-                # Cleanup ETS table on failure
-                VirtualCodeTable.destroy_table(sandbox_id,
-                  table_prefix: table_prefixes.virtual_code
-                )
-
-                SandboxState.update_status(sandbox_state, :error)
-                {:error, {:ets_isolation_failed, reason}}
-            end
-
-          {:error, reason} ->
-            SandboxState.update_status(sandbox_state, :error)
-            {:error, {:ets_table_creation_failed, reason}}
-        end
+        start_ets_isolation_with_compilation(sandbox_state, services, table_prefixes)
     end
+  end
+
+  defp start_ets_isolation_with_compilation(sandbox_state, services, table_prefixes) do
+    case create_ets_virtual_code_table(sandbox_state, table_prefixes) do
+      {:ok, table_ref, updated_state} ->
+        start_ets_sandbox_application(
+          sandbox_state,
+          updated_state,
+          table_ref,
+          services,
+          table_prefixes
+        )
+
+      {:error, reason} ->
+        SandboxState.update_status(sandbox_state, :error)
+        {:error, {:ets_table_creation_failed, reason}}
+    end
+  end
+
+  defp start_ets_sandbox_application(
+         sandbox_state,
+         updated_state,
+         table_ref,
+         services,
+         table_prefixes
+       ) do
+    %SandboxState{
+      id: sandbox_id,
+      app_name: app_name,
+      supervisor_module: supervisor_module,
+      config: config
+    } = sandbox_state
+
+    case start_sandbox_application_with_ets(
+           sandbox_id,
+           app_name,
+           supervisor_module,
+           Map.to_list(config),
+           table_ref,
+           services,
+           table_prefixes
+         ) do
+      {:ok, app_pid, supervisor_pid, full_opts} ->
+        finalize_ets_isolation(updated_state, table_ref, app_pid, supervisor_pid, full_opts)
+
+      {:error, reason} ->
+        # Cleanup ETS table on failure
+        VirtualCodeTable.destroy_table(sandbox_id,
+          table_prefix: table_prefixes.virtual_code
+        )
+
+        SandboxState.update_status(sandbox_state, :error)
+        {:error, {:ets_isolation_failed, reason}}
+    end
+  end
+
+  defp finalize_ets_isolation(updated_state, table_ref, app_pid, supervisor_pid, full_opts) do
+    # Set up monitoring
+    monitor_ref = Process.monitor(supervisor_pid)
+
+    # Extract compile info
+    compile_info = Keyword.get(full_opts, :compile_info, %{})
+    sandbox_path = Keyword.get(full_opts, :sandbox_path)
+
+    # Build artifacts list
+    artifacts = build_compilation_artifacts(sandbox_path, compile_info)
+
+    # Update sandbox state
+    final_state =
+      updated_state
+      |> SandboxState.update_processes(app_pid, supervisor_pid, monitor_ref)
+      |> SandboxState.update_status(:running)
+      |> Map.put(:compilation_artifacts, artifacts)
+      |> Map.put(:isolation_mode, :ets)
+      |> Map.put(:virtual_code_table, table_ref)
+
+    {:ok, final_state, monitor_ref}
   end
 
   defp create_pure_ets_isolation(sandbox_state, table_prefixes) do
@@ -1526,8 +1587,9 @@ defmodule Sandbox.Manager do
            table_prefixes
          ) do
       {:ok, _app_pid, _supervisor_pid, _full_opts} = success ->
-        # TODO: Load compiled modules into ETS table
-        # This is where we'd integrate the compiled BEAM files into the virtual code table
+        # Note: ETS integration for compiled modules is handled by the standard
+        # compilation path. Future enhancement could store BEAM files in the
+        # virtual code table for cross-sandbox module sharing.
         Logger.debug("ETS-based sandbox application started",
           sandbox_id: sandbox_id,
           table_ref: table_ref
@@ -1595,152 +1657,140 @@ defmodule Sandbox.Manager do
   end
 
   defp cleanup_monitoring(monitor_ref, sandbox_id, _state, errors) do
-    try do
-      if monitor_ref do
-        Process.demonitor(monitor_ref, [:flush])
-      end
-
-      errors
-    rescue
-      error ->
-        Logger.warning("Error during monitor cleanup",
-          sandbox_id: sandbox_id,
-          error: inspect(error)
-        )
-
-        [{:monitor_cleanup_failed, error} | errors]
+    if monitor_ref do
+      Process.demonitor(monitor_ref, [:flush])
     end
+
+    errors
+  rescue
+    error ->
+      Logger.warning("Error during monitor cleanup",
+        sandbox_id: sandbox_id,
+        error: inspect(error)
+      )
+
+      [{:monitor_cleanup_failed, error} | errors]
   end
 
   defp cleanup_module_versions(sandbox_id, services, table_prefixes, errors) do
-    try do
-      # Clean up module version manager
-      case GenServer.whereis(services.module_version_manager) do
-        nil ->
-          Logger.debug("ModuleVersionManager not running, skipping module cleanup")
+    # Clean up module version manager
+    case GenServer.whereis(services.module_version_manager) do
+      nil ->
+        Logger.debug("ModuleVersionManager not running, skipping module cleanup")
 
-        _pid ->
-          ModuleVersionManager.cleanup_sandbox_modules(sandbox_id,
-            server: services.module_version_manager
-          )
-      end
+      _pid ->
+        ModuleVersionManager.cleanup_sandbox_modules(sandbox_id,
+          server: services.module_version_manager
+        )
+    end
 
-      # Clean up module transformation registry
-      ModuleTransformer.destroy_module_registry(sandbox_id,
-        table_prefix: table_prefixes.module_registry
-      )
+    # Clean up module transformation registry
+    ModuleTransformer.destroy_module_registry(sandbox_id,
+      table_prefix: table_prefixes.module_registry
+    )
 
-      # Clean up process isolation context
-      case GenServer.whereis(services.process_isolator) do
-        nil ->
-          Logger.debug("ProcessIsolator not running, skipping process isolation cleanup")
+    # Clean up process isolation context
+    case GenServer.whereis(services.process_isolator) do
+      nil ->
+        Logger.debug("ProcessIsolator not running, skipping process isolation cleanup")
 
-        _pid ->
-          # Clean up main context
-          ProcessIsolator.destroy_isolated_context(sandbox_id,
-            server: services.process_isolator
-          )
-
-          # Clean up hybrid wrapper context if it exists
-          ProcessIsolator.destroy_isolated_context("#{sandbox_id}_process_wrapper",
-            server: services.process_isolator
-          )
-      end
-
-      errors
-    rescue
-      error ->
-        Logger.warning("Error during module version cleanup",
-          sandbox_id: sandbox_id,
-          error: inspect(error)
+      _pid ->
+        # Clean up main context
+        ProcessIsolator.destroy_isolated_context(sandbox_id,
+          server: services.process_isolator
         )
 
-        [{:module_cleanup_failed, error} | errors]
+        # Clean up hybrid wrapper context if it exists
+        ProcessIsolator.destroy_isolated_context("#{sandbox_id}_process_wrapper",
+          server: services.process_isolator
+        )
     end
+
+    errors
+  rescue
+    error ->
+      Logger.warning("Error during module version cleanup",
+        sandbox_id: sandbox_id,
+        error: inspect(error)
+      )
+
+      [{:module_cleanup_failed, error} | errors]
   end
 
   defp cleanup_processes(supervisor_pid, errors) do
-    try do
-      if supervisor_pid && Process.alive?(supervisor_pid) do
-        terminate_supervisor_gracefully(supervisor_pid)
-      end
-
-      errors
-    rescue
-      error ->
-        Logger.warning("Error during process cleanup",
-          supervisor_pid: supervisor_pid,
-          error: inspect(error)
-        )
-
-        [{:process_cleanup_failed, error} | errors]
+    if supervisor_pid && Process.alive?(supervisor_pid) do
+      terminate_supervisor_gracefully(supervisor_pid)
     end
+
+    errors
+  rescue
+    error ->
+      Logger.warning("Error during process cleanup",
+        supervisor_pid: supervisor_pid,
+        error: inspect(error)
+      )
+
+      [{:process_cleanup_failed, error} | errors]
   end
 
   defp cleanup_application(app_name, sandbox_id, errors) do
-    try do
-      stop_sandbox_application(app_name, sandbox_id)
-      errors
-    rescue
-      error ->
-        Logger.warning("Error during application cleanup",
-          app_name: app_name,
-          sandbox_id: sandbox_id,
-          error: inspect(error)
-        )
+    stop_sandbox_application(app_name, sandbox_id)
+    errors
+  rescue
+    error ->
+      Logger.warning("Error during application cleanup",
+        app_name: app_name,
+        sandbox_id: sandbox_id,
+        error: inspect(error)
+      )
 
-        [{:application_cleanup_failed, error} | errors]
-    end
+      [{:application_cleanup_failed, error} | errors]
   end
 
   defp cleanup_compilation_artifacts(artifacts, errors) do
-    try do
-      Enum.each(artifacts, fn artifact_path ->
-        if File.exists?(artifact_path) do
-          File.rm_rf!(artifact_path)
-        end
-      end)
+    Enum.each(artifacts, fn artifact_path ->
+      if File.exists?(artifact_path) do
+        File.rm_rf!(artifact_path)
+      end
+    end)
 
-      errors
-    rescue
-      error ->
-        Logger.warning("Error during artifact cleanup",
-          artifacts: artifacts,
-          error: inspect(error)
-        )
+    errors
+  rescue
+    error ->
+      Logger.warning("Error during artifact cleanup",
+        artifacts: artifacts,
+        error: inspect(error)
+      )
 
-        [{:artifact_cleanup_failed, error} | errors]
-    end
+      [{:artifact_cleanup_failed, error} | errors]
   end
 
   defp cleanup_ets_entries(sandbox_id, monitor_ref, tables, table_prefixes, errors) do
-    try do
-      :ets.delete(tables.sandboxes, sandbox_id)
+    :ets.delete(tables.sandboxes, sandbox_id)
 
-      if monitor_ref do
-        :ets.delete(tables.sandbox_monitors, monitor_ref)
-      end
-
-      # Cleanup virtual code table if it exists
-      case VirtualCodeTable.destroy_table(sandbox_id, table_prefix: table_prefixes.virtual_code) do
-        :ok ->
-          Logger.debug("Cleaned up virtual code table for sandbox #{sandbox_id}")
-
-        {:error, :table_not_found} ->
-          # Table doesn't exist, which is fine
-          :ok
-      end
-
-      errors
-    rescue
-      error ->
-        Logger.warning("Error during ETS cleanup",
-          sandbox_id: sandbox_id,
-          error: inspect(error)
-        )
-
-        [{:ets_cleanup_failed, error} | errors]
+    if monitor_ref do
+      :ets.delete(tables.sandbox_monitors, monitor_ref)
     end
+
+    # Cleanup virtual code table if it exists
+    case VirtualCodeTable.destroy_table(sandbox_id, table_prefix: table_prefixes.virtual_code) do
+      :ok ->
+        Logger.debug("Cleaned up virtual code table for sandbox #{sandbox_id}")
+
+      {:error, :table_not_found} ->
+        # Table doesn't exist, which is fine
+        :ok
+    end
+
+    errors
+  rescue
+    error ->
+      Logger.warning("Error during ETS cleanup",
+        sandbox_id: sandbox_id,
+        error: inspect(error)
+      )
+
+      [{:ets_cleanup_failed, error} | errors]
   end
 
   defp terminate_supervisor_gracefully(supervisor_pid) do
@@ -1884,15 +1934,13 @@ defmodule Sandbox.Manager do
 
   defp attempt_state_preservation(%SandboxState{config: %{state_migration_handler: handler}})
        when is_function(handler) do
-    try do
-      # This is a placeholder for state preservation logic
-      # In a full implementation, this would capture GenServer states
-      {:ok, %{preserved_at: DateTime.utc_now(), handler: handler}}
-    rescue
-      error ->
-        Logger.warning("State preservation failed", error: inspect(error))
-        {:error, error}
-    end
+    # This is a placeholder for state preservation logic
+    # In a full implementation, this would capture GenServer states
+    {:ok, %{preserved_at: DateTime.utc_now(), handler: handler}}
+  rescue
+    error ->
+      Logger.warning("State preservation failed", error: inspect(error))
+      {:error, error}
   end
 
   defp attempt_state_preservation(_sandbox_state) do
@@ -2126,42 +2174,40 @@ defmodule Sandbox.Manager do
   end
 
   defp get_real_time_resource_usage(pid) do
-    try do
-      # Get process info for memory usage
-      process_info = Process.info(pid, [:memory, :message_queue_len, :heap_size, :stack_size])
+    # Get process info for memory usage
+    process_info = Process.info(pid, [:memory, :message_queue_len, :heap_size, :stack_size])
 
-      memory_usage =
-        case process_info do
-          nil -> 0
-          info -> Keyword.get(info, :memory, 0)
-        end
+    memory_usage =
+      case process_info do
+        nil -> 0
+        info -> Keyword.get(info, :memory, 0)
+      end
 
-      # Count child processes (simplified)
-      child_count =
-        case Process.info(pid, :links) do
-          nil -> 0
-          {:links, links} -> length(links)
-        end
+    # Count child processes (simplified)
+    child_count =
+      case Process.info(pid, :links) do
+        nil -> 0
+        {:links, links} -> length(links)
+      end
 
+    %{
+      current_memory: memory_usage,
+      # +1 for the supervisor itself
+      current_processes: child_count + 1,
+      # Would need more complex calculation for real CPU usage
+      cpu_usage: 0.0,
+      # Will be calculated by caller
+      uptime: 0
+    }
+  rescue
+    _ ->
+      # Fallback to default values if process info fails
       %{
-        current_memory: memory_usage,
-        # +1 for the supervisor itself
-        current_processes: child_count + 1,
-        # Would need more complex calculation for real CPU usage
+        current_memory: 0,
+        current_processes: 0,
         cpu_usage: 0.0,
-        # Will be calculated by caller
         uptime: 0
       }
-    rescue
-      _ ->
-        # Fallback to default values if process info fails
-        %{
-          current_memory: 0,
-          current_processes: 0,
-          cpu_usage: 0.0,
-          uptime: 0
-        }
-    end
   end
 
   defp parse_module_or_app(module_or_app, opts) do
@@ -2274,23 +2320,28 @@ defmodule Sandbox.Manager do
       |> File.ls!()
       |> Enum.reduce(:ok, fn item, acc ->
         case acc do
-          :ok ->
-            source_item = Path.join(source, item)
-            dest_item = Path.join(destination, item)
-
-            if File.dir?(source_item) do
-              copy_directory(source_item, dest_item)
-            else
-              case File.copy(source_item, dest_item) do
-                {:ok, _} -> :ok
-                {:error, reason} -> {:error, reason}
-              end
-            end
-
-          error ->
-            error
+          :ok -> copy_directory_item(source, destination, item)
+          error -> error
         end
       end)
+    end
+  end
+
+  defp copy_directory_item(source, destination, item) do
+    source_item = Path.join(source, item)
+    dest_item = Path.join(destination, item)
+
+    if File.dir?(source_item) do
+      copy_directory(source_item, dest_item)
+    else
+      copy_file(source_item, dest_item)
+    end
+  end
+
+  defp copy_file(source_item, dest_item) do
+    case File.copy(source_item, dest_item) do
+      {:ok, _} -> :ok
+      {:error, reason} -> {:error, reason}
     end
   end
 
@@ -2476,39 +2527,55 @@ defmodule Sandbox.Manager do
   end
 
   defp transform_source_file(sandbox_id, file_path, table_prefixes) do
-    try do
-      # Read the source file
-      case File.read(file_path) do
-        {:ok, source_code} ->
-          # Transform the source code
-          case ModuleTransformer.transform_source(source_code, sandbox_id) do
-            {:ok, transformed_code, module_mappings} ->
-              # Write the transformed code back
-              case File.write(file_path, transformed_code) do
-                :ok ->
-                  # Register module mappings
-                  Enum.each(module_mappings, fn {original, transformed} ->
-                    ModuleTransformer.register_module_mapping(sandbox_id, original, transformed,
-                      table_prefix: table_prefixes.module_registry
-                    )
-                  end)
+    # Read the source file
+    case File.read(file_path) do
+      {:ok, source_code} ->
+        transform_and_write_source(sandbox_id, file_path, source_code, table_prefixes)
 
-                  {:ok, module_mappings}
+      {:error, read_error} ->
+        {:error, {:read_failed, read_error}}
+    end
+  rescue
+    error ->
+      {:error, {:file_exception, error}}
+  end
 
-                {:error, write_error} ->
-                  {:error, {:write_failed, write_error}}
-              end
+  defp transform_and_write_source(sandbox_id, file_path, source_code, table_prefixes) do
+    case ModuleTransformer.transform_source(source_code, sandbox_id) do
+      {:ok, transformed_code, module_mappings} ->
+        write_transformed_source(
+          sandbox_id,
+          file_path,
+          transformed_code,
+          module_mappings,
+          table_prefixes
+        )
 
-            {:error, transform_error} ->
-              {:error, {:transform_failed, transform_error}}
-          end
+      {:error, transform_error} ->
+        {:error, {:transform_failed, transform_error}}
+    end
+  end
 
-        {:error, read_error} ->
-          {:error, {:read_failed, read_error}}
-      end
-    rescue
-      error ->
-        {:error, {:file_exception, error}}
+  defp write_transformed_source(
+         sandbox_id,
+         file_path,
+         transformed_code,
+         module_mappings,
+         table_prefixes
+       ) do
+    case File.write(file_path, transformed_code) do
+      :ok ->
+        # Register module mappings
+        Enum.each(module_mappings, fn {original, transformed} ->
+          ModuleTransformer.register_module_mapping(sandbox_id, original, transformed,
+            table_prefix: table_prefixes.module_registry
+          )
+        end)
+
+        {:ok, module_mappings}
+
+      {:error, write_error} ->
+        {:error, {:write_failed, write_error}}
     end
   end
 
@@ -2523,46 +2590,44 @@ defmodule Sandbox.Manager do
   end
 
   defp load_beam_file(sandbox_id, beam_file, services, table_prefixes) do
-    try do
-      beam_data = File.read!(beam_file)
-      module = extract_module_from_beam(beam_data)
+    beam_data = File.read!(beam_file)
+    module = extract_module_from_beam(beam_data)
 
-      unless module do
-        throw({:beam_info_failed, "Could not extract module name from BEAM file: #{beam_file}"})
-      end
-
-      # Load the module into the sandbox-specific VirtualCodeTable (ETS)
-      # This avoids polluting the global code path.
-      case VirtualCodeTable.load_module(sandbox_id, module, beam_data,
-             table_prefix: table_prefixes.virtual_code
-           ) do
-        :ok ->
-          # Also register with the version manager for hot-reload capabilities
-          case ModuleVersionManager.register_module_version(sandbox_id, module, beam_data,
-                 server: services.module_version_manager
-               ) do
-            {:ok, version} ->
-              Logger.debug("Loaded module #{module} version #{version} for sandbox #{sandbox_id}")
-              :ok
-
-            {:error, reason} ->
-              {:error, {:version_registration_failed, module, reason}}
-          end
-
-        # This can happen on restart/reload, which is acceptable.
-        {:error, {:module_already_loaded, ^module}} ->
-          :ok
-
-        {:error, reason} ->
-          {:error, {:virtual_load_failed, module, reason}}
-      end
-    rescue
-      error ->
-        {:error, {:beam_load_failed, beam_file, error}}
-    catch
-      thrown_error ->
-        {:error, thrown_error}
+    unless module do
+      throw({:beam_info_failed, "Could not extract module name from BEAM file: #{beam_file}"})
     end
+
+    # Load the module into the sandbox-specific VirtualCodeTable (ETS)
+    # This avoids polluting the global code path.
+    case VirtualCodeTable.load_module(sandbox_id, module, beam_data,
+           table_prefix: table_prefixes.virtual_code
+         ) do
+      :ok ->
+        # Also register with the version manager for hot-reload capabilities
+        case ModuleVersionManager.register_module_version(sandbox_id, module, beam_data,
+               server: services.module_version_manager
+             ) do
+          {:ok, version} ->
+            Logger.debug("Loaded module #{module} version #{version} for sandbox #{sandbox_id}")
+            :ok
+
+          {:error, reason} ->
+            {:error, {:version_registration_failed, module, reason}}
+        end
+
+      # This can happen on restart/reload, which is acceptable.
+      {:error, {:module_already_loaded, ^module}} ->
+        :ok
+
+      {:error, reason} ->
+        {:error, {:virtual_load_failed, module, reason}}
+    end
+  rescue
+    error ->
+      {:error, {:beam_load_failed, beam_file, error}}
+  catch
+    thrown_error ->
+      {:error, thrown_error}
   end
 
   defp load_sandbox_application(app_name, _sandbox_id, _app_file) do

@@ -25,7 +25,7 @@ defmodule Sandbox.IsolatedCompilerIncrementalTest do
       assert {:ok, first_result} =
                IsolatedCompiler.compile_sandbox(sandbox_dir, cache_enabled: true)
 
-      assert length(first_result.beam_files) > 0
+      assert first_result.beam_files != []
 
       # Incremental compilation with no changes
       assert {:ok, second_result} =

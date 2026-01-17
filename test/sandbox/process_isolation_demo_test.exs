@@ -25,7 +25,7 @@ defmodule Sandbox.ProcessIsolationDemoTest do
 
     write_module_file(test_dir, "lib/process_demo.ex", module_content)
 
-    # Test supervisor 
+    # Test supervisor
     defmodule ProcessIsolationTestSupervisor do
       use Supervisor
 

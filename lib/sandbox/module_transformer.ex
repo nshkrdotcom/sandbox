@@ -291,8 +291,7 @@ defmodule Sandbox.ModuleTransformer do
 
   defp module_alias_to_atom({:__aliases__, _, parts}) do
     parts
-    |> Enum.map(&to_string/1)
-    |> Enum.join(".")
+    |> Enum.map_join(".", &to_string/1)
     |> String.to_atom()
   end
 
@@ -375,10 +374,8 @@ defmodule Sandbox.ModuleTransformer do
     |> String.split(~r/[_]+/)
     # Remove empty parts
     |> Enum.reject(&(&1 == ""))
-    # Capitalize each part  
-    |> Enum.map(&String.capitalize/1)
-    # Join with single underscores
-    |> Enum.join("_")
+    # Capitalize each part and join with single underscores
+    |> Enum.map_join("_", &String.capitalize/1)
     |> ensure_starts_with_letter()
   end
 

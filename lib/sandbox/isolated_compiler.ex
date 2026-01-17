@@ -341,7 +341,7 @@ defmodule Sandbox.IsolatedCompiler do
     # by only recompiling the changed functions
     function_only_files = compilation_scope.function_only_changes
 
-    if length(function_only_files) > 0 and length(function_only_files) < 5 do
+    if function_only_files != [] and length(function_only_files) < 5 do
       # Small number of function-only changes - use optimized compilation
       perform_optimized_function_compilation(sandbox_path, function_only_files, opts)
     else
@@ -403,9 +403,7 @@ defmodule Sandbox.IsolatedCompiler do
   """
   @spec compile_file(String.t(), compile_opts()) :: compile_result()
   def compile_file(file_path, opts \\ []) do
-    unless File.exists?(file_path) do
-      {:error, {:invalid_file_path, "File does not exist: #{file_path}"}}
-    else
+    if File.exists?(file_path) do
       # Create a temporary directory for single file compilation
       temp_sandbox = Path.join(System.tmp_dir!(), "apex_file_#{random_string()}")
       File.mkdir_p!(temp_sandbox)
@@ -420,6 +418,8 @@ defmodule Sandbox.IsolatedCompiler do
       File.rm_rf!(temp_sandbox)
 
       result
+    else
+      {:error, {:invalid_file_path, "File does not exist: #{file_path}"}}
     end
   end
 
@@ -444,10 +444,8 @@ defmodule Sandbox.IsolatedCompiler do
     scan_depth = Keyword.get(opts, :scan_depth, 3)
 
     with :ok <- validate_sandbox_path(sandbox_path),
-         {:ok, files} <- get_source_files(sandbox_path),
-         {:ok, scan_results} <-
-           perform_security_scan(files, restricted_modules, allowed_operations, scan_depth) do
-      {:ok, scan_results}
+         {:ok, files} <- get_source_files(sandbox_path) do
+      perform_security_scan(files, restricted_modules, allowed_operations, scan_depth)
     end
   end
 
@@ -494,7 +492,6 @@ defmodule Sandbox.IsolatedCompiler do
   end
 
   defp compile_in_isolation(sandbox_path, temp_dir, timeout, opts) do
-    parent = self()
     memory_limit = Keyword.get(opts, :memory_limit, @default_memory_limit)
     cpu_limit = Keyword.get(opts, :cpu_limit, 80.0)
     max_processes = Keyword.get(opts, :max_processes, 100)
@@ -504,17 +501,19 @@ defmodule Sandbox.IsolatedCompiler do
 
     # Perform security scan before compilation if enabled
     with :ok <- maybe_perform_security_scan(security_scan, sandbox_path, opts) do
-      do_compile_in_isolation(
-        parent,
-        sandbox_path,
-        temp_dir,
-        timeout,
-        memory_limit,
-        cpu_limit,
-        max_processes,
-        env,
-        compiler
-      )
+      compile_context = %{
+        parent: self(),
+        sandbox_path: sandbox_path,
+        temp_dir: temp_dir,
+        timeout: timeout,
+        memory_limit: memory_limit,
+        cpu_limit: cpu_limit,
+        max_processes: max_processes,
+        env: env,
+        compiler: compiler
+      }
+
+      do_compile_in_isolation(compile_context)
     end
   end
 
@@ -528,17 +527,19 @@ defmodule Sandbox.IsolatedCompiler do
     end
   end
 
-  defp do_compile_in_isolation(
-         parent,
-         sandbox_path,
-         temp_dir,
-         timeout,
-         memory_limit,
-         cpu_limit,
-         max_processes,
-         env,
-         compiler
-       ) do
+  defp do_compile_in_isolation(ctx) do
+    %{
+      parent: parent,
+      sandbox_path: sandbox_path,
+      temp_dir: temp_dir,
+      timeout: timeout,
+      memory_limit: memory_limit,
+      cpu_limit: cpu_limit,
+      max_processes: max_processes,
+      env: env,
+      compiler: compiler
+    } = ctx
+
     # Set up isolated build environment with comprehensive resource constraints
     build_env =
       Map.merge(
@@ -681,7 +682,7 @@ defmodule Sandbox.IsolatedCompiler do
       files = Path.wildcard(Path.join(sandbox_path, "*.ex"))
       elixirc_path = System.find_executable("elixirc") || "elixirc"
 
-      if length(files) > 0 do
+      if files != [] do
         ebin_dir = Path.join(sandbox_path, "ebin")
         File.mkdir_p!(ebin_dir)
 
@@ -788,18 +789,16 @@ defmodule Sandbox.IsolatedCompiler do
   defp maybe_validate_beams(_beam_files, false), do: :ok
 
   defp validate_beam_file(beam_file) do
-    try do
-      case :beam_lib.info(String.to_charlist(beam_file)) do
-        {:error, :beam_lib, reason} ->
-          {:error, "Invalid BEAM file: #{inspect(reason)}"}
+    case :beam_lib.info(String.to_charlist(beam_file)) do
+      {:error, :beam_lib, reason} ->
+        {:error, "Invalid BEAM file: #{inspect(reason)}"}
 
-        info when is_list(info) ->
-          # beam_lib.info returns a list of chunks/info directly
-          :ok
-      end
-    rescue
-      error -> {:error, "BEAM validation error: #{inspect(error)}"}
+      info when is_list(info) ->
+        # beam_lib.info returns a list of chunks/info directly
+        :ok
     end
+  rescue
+    error -> {:error, "BEAM validation error: #{inspect(error)}"}
   end
 
   defp random_string(length \\ 8) do
@@ -870,117 +869,149 @@ defmodule Sandbox.IsolatedCompiler do
 
     Logger.debug("Current files: #{inspect(Map.keys(current_hashes))}")
 
-    previous_hashes =
-      if File.exists?(hash_file) do
-        try do
-          decoded =
-            hash_file
-            |> File.read!()
-            |> Jason.decode!()
+    previous_hashes = load_previous_hashes(hash_file)
 
-          result = Map.new(decoded, fn {k, v} -> {to_string(k), v} end)
-          Logger.debug("Loaded #{map_size(result)} previous hashes")
-          result
-        rescue
-          _ -> %{}
-        end
-      else
-        Logger.debug("No previous hash file found")
-        %{}
-      end
-
-    # Detect different types of changes
     {content_changed, function_changed} =
-      current_hashes
-      |> Enum.reduce({[], []}, fn {file, current_hash_info}, {content_acc, function_acc} ->
-        # Ensure file is a string for consistent comparison
-        file_key = to_string(file)
-        previous_hash_info = Map.get(previous_hashes, file_key, %{})
-
-        # If no previous hash exists, consider it changed only if previous_hashes is empty (first run)
-        # Otherwise, if the file is new, it's changed
-        no_previous_hash =
-          Map.get(previous_hash_info, "content_hash") == nil &&
-            Map.get(previous_hash_info, :content_hash) == nil
-
-        is_first_run = map_size(previous_hashes) == 0
-
-        content_changed =
-          if no_previous_hash do
-            is_first_run or not Map.has_key?(previous_hashes, file_key)
-          else
-            current_hash = current_hash_info.content_hash
-
-            previous_hash =
-              Map.get(previous_hash_info, "content_hash") ||
-                Map.get(previous_hash_info, :content_hash)
-
-            changed = current_hash != previous_hash
-
-            if file_key == "lib/base_module.ex" do
-              Logger.debug(
-                "Hash comparison for #{file_key}: current=#{inspect(current_hash)}, previous=#{inspect(previous_hash)}, changed=#{changed}"
-              )
-            end
-
-            changed
-          end
-
-        function_changed =
-          if no_previous_hash do
-            is_first_run or not Map.has_key?(previous_hashes, file_key)
-          else
-            current_hash_info.function_hash !=
-              (Map.get(previous_hash_info, "function_hash") ||
-                 Map.get(previous_hash_info, :function_hash))
-          end
-
-        new_content_acc = if content_changed, do: [file | content_acc], else: content_acc
-        new_function_acc = if function_changed, do: [file | function_acc], else: function_acc
-
-        {new_content_acc, new_function_acc}
-      end)
+      detect_hash_changes(current_hashes, previous_hashes)
 
     Logger.debug(
       "Change detection: content_changed=#{inspect(content_changed)}, function_changed=#{inspect(function_changed)}"
     )
 
-    # Also check for new files (files in current but not in previous)
-    new_files =
-      current_hashes
-      |> Map.keys()
-      |> Enum.filter(fn file -> not Map.has_key?(previous_hashes, file) end)
-
-    # And deleted files (files in previous but not in current)
-    deleted_files =
-      previous_hashes
-      |> Map.keys()
-      |> Enum.filter(fn file -> not Map.has_key?(current_hashes, file) end)
+    new_files = find_new_files(current_hashes, previous_hashes)
+    deleted_files = find_deleted_files(current_hashes, previous_hashes)
 
     all_changed_files =
       Enum.uniq(content_changed ++ function_changed ++ new_files ++ deleted_files)
 
-    # Update hash file
-    try do
-      File.write!(hash_file, Jason.encode!(current_hashes))
-      Logger.debug("Updated hash file with #{map_size(current_hashes)} entries")
-    rescue
-      error ->
-        Logger.warning("Failed to write hash file: #{inspect(error)}")
+    save_hash_file(hash_file, current_hashes)
+
+    {:ok,
+     %{
+       content_changed: content_changed,
+       function_changed: function_changed,
+       all_changed: all_changed_files,
+       new_files: new_files,
+       deleted_files: deleted_files,
+       incremental_eligible: function_changed != [] and content_changed -- function_changed == []
+     }}
+  end
+
+  defp load_previous_hashes(hash_file) do
+    if File.exists?(hash_file) do
+      try do
+        decoded =
+          hash_file
+          |> File.read!()
+          |> Jason.decode!()
+
+        result = Map.new(decoded, fn {k, v} -> {to_string(k), v} end)
+        Logger.debug("Loaded #{map_size(result)} previous hashes")
+        result
+      rescue
+        _ -> %{}
+      end
+    else
+      Logger.debug("No previous hash file found")
+      %{}
     end
+  end
 
-    # Return comprehensive change information
-    change_info = %{
-      content_changed: content_changed,
-      function_changed: function_changed,
-      all_changed: all_changed_files,
-      new_files: new_files,
-      deleted_files: deleted_files,
-      incremental_eligible:
-        length(function_changed) > 0 and length(content_changed -- function_changed) == 0
-    }
+  defp detect_hash_changes(current_hashes, previous_hashes) do
+    is_first_run = map_size(previous_hashes) == 0
 
-    {:ok, change_info}
+    current_hashes
+    |> Enum.reduce({[], []}, fn {file, current_hash_info}, {content_acc, function_acc} ->
+      file_key = to_string(file)
+      previous_hash_info = Map.get(previous_hashes, file_key, %{})
+
+      content_changed =
+        check_content_changed(
+          current_hash_info,
+          previous_hash_info,
+          file_key,
+          previous_hashes,
+          is_first_run
+        )
+
+      function_changed =
+        check_function_changed(
+          current_hash_info,
+          previous_hash_info,
+          file_key,
+          previous_hashes,
+          is_first_run
+        )
+
+      new_content_acc = if content_changed, do: [file | content_acc], else: content_acc
+      new_function_acc = if function_changed, do: [file | function_acc], else: function_acc
+
+      {new_content_acc, new_function_acc}
+    end)
+  end
+
+  defp check_content_changed(
+         current_hash_info,
+         previous_hash_info,
+         file_key,
+         previous_hashes,
+         is_first_run
+       ) do
+    no_previous_hash = has_no_previous_hash?(previous_hash_info, :content_hash)
+
+    if no_previous_hash do
+      is_first_run or not Map.has_key?(previous_hashes, file_key)
+    else
+      current_hash = current_hash_info.content_hash
+      previous_hash = get_hash_value(previous_hash_info, :content_hash)
+      current_hash != previous_hash
+    end
+  end
+
+  defp check_function_changed(
+         current_hash_info,
+         previous_hash_info,
+         file_key,
+         previous_hashes,
+         is_first_run
+       ) do
+    no_previous_hash = has_no_previous_hash?(previous_hash_info, :function_hash)
+
+    if no_previous_hash do
+      is_first_run or not Map.has_key?(previous_hashes, file_key)
+    else
+      current_hash_info.function_hash != get_hash_value(previous_hash_info, :function_hash)
+    end
+  end
+
+  defp has_no_previous_hash?(previous_hash_info, hash_key) do
+    string_key = Atom.to_string(hash_key)
+    Map.get(previous_hash_info, string_key) == nil && Map.get(previous_hash_info, hash_key) == nil
+  end
+
+  defp get_hash_value(hash_info, hash_key) do
+    string_key = Atom.to_string(hash_key)
+    Map.get(hash_info, string_key) || Map.get(hash_info, hash_key)
+  end
+
+  defp find_new_files(current_hashes, previous_hashes) do
+    current_hashes
+    |> Map.keys()
+    |> Enum.filter(fn file -> not Map.has_key?(previous_hashes, file) end)
+  end
+
+  defp find_deleted_files(current_hashes, previous_hashes) do
+    previous_hashes
+    |> Map.keys()
+    |> Enum.filter(fn file -> not Map.has_key?(current_hashes, file) end)
+  end
+
+  defp save_hash_file(hash_file, current_hashes) do
+    File.write!(hash_file, Jason.encode!(current_hashes))
+    Logger.debug("Updated hash file with #{map_size(current_hashes)} entries")
+  rescue
+    error ->
+      Logger.warning("Failed to write hash file: #{inspect(error)}")
   end
 
   defp calculate_file_hashes(sandbox_path) do
@@ -1024,30 +1055,28 @@ defmodule Sandbox.IsolatedCompiler do
   end
 
   defp calculate_function_level_hash(content) when is_binary(content) do
-    try do
-      # Parse the content to extract function definitions
-      case Code.string_to_quoted(content) do
-        {:ok, ast} ->
-          functions = extract_function_definitions(ast)
+    # Parse the content to extract function definitions
+    case Code.string_to_quoted(content) do
+      {:ok, ast} ->
+        functions = extract_function_definitions(ast)
 
-          # Create hash based on function signatures and bodies
-          functions
-          |> Enum.sort()
-          |> :erlang.term_to_binary()
-          |> then(&:crypto.hash(:sha256, &1))
-          |> Base.encode16(case: :lower)
+        # Create hash based on function signatures and bodies
+        functions
+        |> Enum.sort()
+        |> :erlang.term_to_binary()
+        |> then(&:crypto.hash(:sha256, &1))
+        |> Base.encode16(case: :lower)
 
-        {:error, _} ->
-          # If parsing fails, fall back to content hash
-          :crypto.hash(:sha256, content)
-          |> Base.encode16(case: :lower)
-      end
-    rescue
-      _ ->
-        # If anything fails, fall back to content hash
+      {:error, _} ->
+        # If parsing fails, fall back to content hash
         :crypto.hash(:sha256, content)
         |> Base.encode16(case: :lower)
     end
+  rescue
+    _ ->
+      # If anything fails, fall back to content hash
+      :crypto.hash(:sha256, content)
+      |> Base.encode16(case: :lower)
   end
 
   defp extract_function_definitions(ast) do
@@ -1164,21 +1193,19 @@ defmodule Sandbox.IsolatedCompiler do
   end
 
   defp extract_file_dependencies(file_path) do
-    try do
-      content = File.read!(file_path)
+    content = File.read!(file_path)
 
-      # Try AST-based analysis first
-      case Code.string_to_quoted(content) do
-        {:ok, ast} ->
-          extract_dependencies_from_ast(ast)
+    # Try AST-based analysis first
+    case Code.string_to_quoted(content) do
+      {:ok, ast} ->
+        extract_dependencies_from_ast(ast)
 
-        {:error, _} ->
-          # Fall back to regex-based analysis
-          extract_dependencies_with_regex(content)
-      end
-    rescue
-      _ -> []
+      {:error, _} ->
+        # Fall back to regex-based analysis
+        extract_dependencies_with_regex(content)
     end
+  rescue
+    _ -> []
   end
 
   defp extract_dependencies_from_ast(ast) do
@@ -1246,15 +1273,13 @@ defmodule Sandbox.IsolatedCompiler do
   end
 
   defp calculate_single_file_hash(file_path) do
-    try do
-      content = File.read!(file_path)
+    content = File.read!(file_path)
 
-      # Content from File.read! is always binary
-      :crypto.hash(:sha256, content)
-      |> Base.encode16(case: :lower)
-    rescue
-      _ -> "unknown"
-    end
+    # Content from File.read! is always binary
+    :crypto.hash(:sha256, content)
+    |> Base.encode16(case: :lower)
+  rescue
+    _ -> "unknown"
   end
 
   defp load_cached_dependencies(cache_file) do
@@ -1276,22 +1301,7 @@ defmodule Sandbox.IsolatedCompiler do
     cache_data =
       dependencies
       |> Enum.into(%{}, fn {file_path, deps} ->
-        full_path =
-          if String.starts_with?(file_path, "/") do
-            file_path
-          else
-            # Find the full path from the files list
-            Enum.find(files, fn f -> String.ends_with?(f, file_path) end) || file_path
-          end
-
-        file_hash = calculate_single_file_hash(full_path)
-
-        {file_path,
-         %{
-           dependencies: deps,
-           file_hash: file_hash,
-           analyzed_at: DateTime.utc_now() |> DateTime.to_iso8601()
-         }}
+        build_dependency_cache_entry(file_path, deps, files)
       end)
 
     try do
@@ -1299,6 +1309,26 @@ defmodule Sandbox.IsolatedCompiler do
     rescue
       error ->
         Logger.warning("Failed to cache dependencies: #{inspect(error)}")
+    end
+  end
+
+  defp build_dependency_cache_entry(file_path, deps, files) do
+    full_path = resolve_full_path(file_path, files)
+    file_hash = calculate_single_file_hash(full_path)
+
+    {file_path,
+     %{
+       dependencies: deps,
+       file_hash: file_hash,
+       analyzed_at: DateTime.utc_now() |> DateTime.to_iso8601()
+     }}
+  end
+
+  defp resolve_full_path(file_path, files) do
+    if String.starts_with?(file_path, "/") do
+      file_path
+    else
+      Enum.find(files, fn f -> String.ends_with?(f, file_path) end) || file_path
     end
   end
 
@@ -1379,25 +1409,32 @@ defmodule Sandbox.IsolatedCompiler do
     # Check if cache is too old (older than 24 hours)
     case DateTime.from_iso8601(cached_data.timestamp) do
       {:ok, cache_time, _} ->
-        now = DateTime.utc_now()
-        hours_old = DateTime.diff(now, cache_time, :hour)
-
-        if hours_old > 24 do
-          :invalid
-        else
-          # Check if BEAM files still exist
-          beam_files = Map.get(cached_data, :beam_files, [])
-
-          if Enum.all?(beam_files, &File.exists?/1) do
-            :valid
-          else
-            :invalid
-          end
-        end
+        validate_cache_age_and_files(cache_time, cached_data)
 
       {:error, _} ->
         :invalid
     end
+  end
+
+  defp validate_cache_age_and_files(cache_time, cached_data) do
+    now = DateTime.utc_now()
+    hours_old = DateTime.diff(now, cache_time, :hour)
+
+    cond do
+      hours_old > 24 ->
+        :invalid
+
+      not beam_files_exist?(cached_data) ->
+        :invalid
+
+      true ->
+        :valid
+    end
+  end
+
+  defp beam_files_exist?(cached_data) do
+    beam_files = Map.get(cached_data, :beam_files, [])
+    Enum.all?(beam_files, &File.exists?/1)
   end
 
   defp update_compilation_cache(cache_dir, sandbox_path, compile_info) do
@@ -1733,7 +1770,18 @@ defmodule Sandbox.IsolatedCompiler do
        ) do
     active_pids = Enum.map(monitored_pids, fn {pid, _ref, _usage} -> pid end)
 
-    # Check process count
+    case check_process_count(active_pids, max_processes) do
+      {:error, _, _} = error ->
+        error
+
+      :ok ->
+        memory_status = check_memory_status(monitored_pids, memory_limit)
+        cpu_status = check_cpu_usage(monitored_pids, cpu_limit, state)
+        combine_resource_statuses(memory_status, cpu_status)
+    end
+  end
+
+  defp check_process_count(active_pids, max_processes) do
     if length(active_pids) > max_processes do
       {:error, :max_processes,
        %{
@@ -1742,44 +1790,44 @@ defmodule Sandbox.IsolatedCompiler do
          pids: active_pids
        }}
     else
-      # Check memory usage with detailed tracking
-      {total_memory, memory_details} = get_detailed_memory_usage(monitored_pids)
+      :ok
+    end
+  end
 
-      memory_status =
-        cond do
-          total_memory > memory_limit ->
-            {:error, :memory_limit,
-             %{
-               current: total_memory,
-               limit: memory_limit,
-               details: memory_details,
-               top_consumers: get_top_memory_consumers(memory_details, 3)
-             }}
+  defp check_memory_status(monitored_pids, memory_limit) do
+    {total_memory, memory_details} = get_detailed_memory_usage(monitored_pids)
 
-          total_memory > memory_limit * 0.8 ->
-            {:warning, :memory_limit,
-             %{
-               current: total_memory,
-               limit: memory_limit,
-               usage_percentage: total_memory / memory_limit * 100
-             }, %{}}
+    cond do
+      total_memory > memory_limit ->
+        {:error, :memory_limit,
+         %{
+           current: total_memory,
+           limit: memory_limit,
+           details: memory_details,
+           top_consumers: get_top_memory_consumers(memory_details, 3)
+         }}
 
-          true ->
-            {:ok, %{memory_usage: total_memory}}
-        end
+      total_memory > memory_limit * 0.8 ->
+        {:warning, :memory_limit,
+         %{
+           current: total_memory,
+           limit: memory_limit,
+           usage_percentage: total_memory / memory_limit * 100
+         }, %{}}
 
-      # Check CPU usage if monitoring is enabled
-      cpu_status = check_cpu_usage(monitored_pids, cpu_limit, state)
+      true ->
+        {:ok, %{memory_usage: total_memory}}
+    end
+  end
 
-      # Combine results
-      case {memory_status, cpu_status} do
-        {{:error, type, details}, _} -> {:error, type, details}
-        {_, {:error, type, details}} -> {:error, type, details}
-        {{:warning, type, details, state_update}, _} -> {:warning, type, details, state_update}
-        {_, {:warning, type, details, state_update}} -> {:warning, type, details, state_update}
-        {{:ok, mem_state}, {:ok, cpu_state}} -> {:ok, Map.merge(mem_state, cpu_state)}
-        {{:ok, mem_state}, :ok} -> {:ok, mem_state}
-      end
+  defp combine_resource_statuses(memory_status, cpu_status) do
+    case {memory_status, cpu_status} do
+      {{:error, type, details}, _} -> {:error, type, details}
+      {_, {:error, type, details}} -> {:error, type, details}
+      {{:warning, type, details, state_update}, _} -> {:warning, type, details, state_update}
+      {_, {:warning, type, details, state_update}} -> {:warning, type, details, state_update}
+      {{:ok, mem_state}, {:ok, cpu_state}} -> {:ok, Map.merge(mem_state, cpu_state)}
+      {{:ok, mem_state}, :ok} -> {:ok, mem_state}
     end
   end
 
@@ -1849,29 +1897,32 @@ defmodule Sandbox.IsolatedCompiler do
   end
 
   defp get_system_cpu_info do
-    try do
-      # Check if cpu_sup module is available (from os_mon application)
-      if Code.ensure_loaded?(:cpu_sup) and function_exported?(:cpu_sup, :util, 0) do
-        get_cpu_util_safe()
-      else
-        # os_mon not available, return default
-        %{utilization: 0, timestamp: System.monotonic_time(:millisecond)}
-      end
-    rescue
-      _ -> %{utilization: 0, timestamp: System.monotonic_time(:millisecond)}
+    # Check if cpu_sup module is available (from os_mon application)
+    if Code.ensure_loaded?(:cpu_sup) and function_exported?(:cpu_sup, :util, 0) do
+      get_cpu_util_safe()
+    else
+      # os_mon not available, return default
+      %{utilization: 0, timestamp: System.monotonic_time(:millisecond)}
     end
+  rescue
+    _ -> %{utilization: 0, timestamp: System.monotonic_time(:millisecond)}
   end
 
   defp get_cpu_util_safe do
-    case apply(:cpu_sup, :util, []) do
-      {:error, _} ->
-        %{utilization: 0, timestamp: System.monotonic_time(:millisecond)}
+    if Code.ensure_loaded?(:cpu_sup) and function_exported?(:cpu_sup, :util, 0) do
+      # credo:disable-for-next-line Credo.Check.Refactor.Apply
+      case apply(:cpu_sup, :util, []) do
+        {:error, _} ->
+          %{utilization: 0, timestamp: System.monotonic_time(:millisecond)}
 
-      util when is_number(util) ->
-        %{utilization: util, timestamp: System.monotonic_time(:millisecond)}
+        util when is_number(util) ->
+          %{utilization: util, timestamp: System.monotonic_time(:millisecond)}
 
-      _ ->
-        %{utilization: 0, timestamp: System.monotonic_time(:millisecond)}
+        _ ->
+          %{utilization: 0, timestamp: System.monotonic_time(:millisecond)}
+      end
+    else
+      %{utilization: 0, timestamp: System.monotonic_time(:millisecond)}
     end
   end
 
@@ -1889,41 +1940,29 @@ defmodule Sandbox.IsolatedCompiler do
   end
 
   defp get_process_cpu_usage(pid) do
-    try do
-      case Process.info(pid, [:reductions]) do
-        [{:reductions, reductions}] ->
-          # Convert reductions to approximate CPU percentage
-          # This is a rough approximation
-          min(reductions / 10000, 100)
+    case Process.info(pid, [:reductions]) do
+      [{:reductions, reductions}] ->
+        # Convert reductions to approximate CPU percentage
+        # This is a rough approximation
+        min(reductions / 10_000, 100)
 
-        _ ->
-          0
-      end
-    rescue
-      _ -> 0
+      _ ->
+        0
     end
+  rescue
+    _ -> 0
   end
 
   defp get_process_resource_usage(pid) do
-    try do
-      case Process.info(pid, [:memory, :reductions, :message_queue_len]) do
-        info when is_list(info) ->
-          %{
-            memory: Keyword.get(info, :memory, 0),
-            reductions: Keyword.get(info, :reductions, 0),
-            message_queue_len: Keyword.get(info, :message_queue_len, 0),
-            timestamp: System.monotonic_time(:millisecond)
-          }
+    case Process.info(pid, [:memory, :reductions, :message_queue_len]) do
+      info when is_list(info) ->
+        %{
+          memory: Keyword.get(info, :memory, 0),
+          reductions: Keyword.get(info, :reductions, 0),
+          message_queue_len: Keyword.get(info, :message_queue_len, 0),
+          timestamp: System.monotonic_time(:millisecond)
+        }
 
-        _ ->
-          %{
-            memory: 0,
-            reductions: 0,
-            message_queue_len: 0,
-            timestamp: System.monotonic_time(:millisecond)
-          }
-      end
-    rescue
       _ ->
         %{
           memory: 0,
@@ -1932,6 +1971,14 @@ defmodule Sandbox.IsolatedCompiler do
           timestamp: System.monotonic_time(:millisecond)
         }
     end
+  rescue
+    _ ->
+      %{
+        memory: 0,
+        reductions: 0,
+        message_queue_len: 0,
+        timestamp: System.monotonic_time(:millisecond)
+      }
   end
 
   defp get_restricted_path do
@@ -2011,7 +2058,7 @@ defmodule Sandbox.IsolatedCompiler do
         end)
         |> Enum.filter(&File.regular?/1)
 
-      if length(suspicious_files) > 0 do
+      if suspicious_files != [] do
         [
           %{
             type: :post_compilation_security,
@@ -2121,83 +2168,87 @@ defmodule Sandbox.IsolatedCompiler do
   end
 
   defp scan_file_security(file_path, restricted_modules, allowed_operations, _scan_depth) do
-    try do
-      content = File.read!(file_path)
-      threats = []
-      warnings = []
+    content = File.read!(file_path)
+    threats = []
+    warnings = []
 
-      # Check for restricted modules
-      module_threats = scan_restricted_modules(content, file_path, restricted_modules)
+    # Check for restricted modules
+    module_threats = scan_restricted_modules(content, file_path, restricted_modules)
 
-      # Check for dangerous operations
-      operation_warnings = scan_dangerous_operations(content, file_path, allowed_operations)
+    # Check for dangerous operations
+    operation_warnings = scan_dangerous_operations(content, file_path, allowed_operations)
 
-      # Check for file system access
-      file_access_warnings = scan_file_access(content, file_path)
+    # Check for file system access
+    file_access_warnings = scan_file_access(content, file_path)
 
-      # Check for network operations
-      network_warnings = scan_network_operations(content, file_path)
+    # Check for network operations
+    network_warnings = scan_network_operations(content, file_path)
 
-      # Check for process spawning
-      process_warnings = scan_process_operations(content, file_path)
+    # Check for process spawning
+    process_warnings = scan_process_operations(content, file_path)
 
-      all_threats = threats ++ module_threats
+    all_threats = threats ++ module_threats
 
-      all_warnings =
-        warnings ++
-          operation_warnings ++
-          file_access_warnings ++
-          network_warnings ++ process_warnings
+    all_warnings =
+      warnings ++
+        operation_warnings ++
+        file_access_warnings ++
+        network_warnings ++ process_warnings
 
-      {:ok, all_threats, all_warnings}
-    rescue
-      error -> {:error, {:file_scan_failed, file_path, error}}
-    end
+    {:ok, all_threats, all_warnings}
+  rescue
+    error -> {:error, {:file_scan_failed, file_path, error}}
   end
 
   defp scan_restricted_modules(content, file_path, restricted_modules) do
     restricted_modules
     |> Enum.flat_map(fn module ->
-      # Handle both atom modules and string modules
-      module_str =
-        case module do
-          mod when is_atom(mod) ->
-            # Remove "Elixir." prefix for Elixir modules
-            mod |> to_string() |> String.replace_prefix("Elixir.", "")
-
-          mod when is_binary(mod) ->
-            mod
-        end
-
-      patterns = [
-        ~r/#{module_str}\./,
-        ~r/alias\s+#{module_str}/,
-        ~r/import\s+#{module_str}/,
-        ~r/use\s+#{module_str}/
-      ]
-
-      patterns
-      |> Enum.flat_map(fn pattern ->
-        case Regex.run(pattern, content, return: :index) do
-          nil ->
-            []
-
-          [{start, _length}] ->
-            line_number = get_line_number(content, start)
-
-            [
-              %{
-                type: :restricted_module,
-                severity: :high,
-                module: module,
-                file: file_path,
-                line: line_number,
-                message: "Use of restricted module: #{module}"
-              }
-            ]
-        end
-      end)
+      scan_single_restricted_module(content, file_path, module)
     end)
+  end
+
+  defp scan_single_restricted_module(content, file_path, module) do
+    module_str = normalize_module_name(module)
+
+    patterns = [
+      ~r/#{module_str}\./,
+      ~r/alias\s+#{module_str}/,
+      ~r/import\s+#{module_str}/,
+      ~r/use\s+#{module_str}/
+    ]
+
+    Enum.flat_map(patterns, fn pattern ->
+      find_pattern_match(pattern, content, file_path, module)
+    end)
+  end
+
+  defp normalize_module_name(mod) when is_atom(mod) do
+    mod |> to_string() |> String.replace_prefix("Elixir.", "")
+  end
+
+  defp normalize_module_name(mod) when is_binary(mod), do: mod
+
+  defp find_pattern_match(pattern, content, file_path, module) do
+    case Regex.run(pattern, content, return: :index) do
+      nil ->
+        []
+
+      [{start, _length}] ->
+        [build_restricted_module_threat(start, content, file_path, module)]
+    end
+  end
+
+  defp build_restricted_module_threat(start, content, file_path, module) do
+    line_number = get_line_number(content, start)
+
+    %{
+      type: :restricted_module,
+      severity: :high,
+      module: module,
+      file: file_path,
+      line: line_number,
+      message: "Use of restricted module: #{module}"
+    }
   end
 
   defp scan_dangerous_operations(content, file_path, allowed_operations) do
@@ -2328,34 +2379,38 @@ defmodule Sandbox.IsolatedCompiler do
   defp scan_enhanced_patterns_for_warnings(content, file_path, patterns, warning_type) do
     patterns
     |> Enum.flat_map(fn {pattern, operation} ->
-      case Regex.scan(pattern, content, return: :index) do
-        [] ->
-          []
-
-        matches ->
-          Enum.map(matches, fn [{start, length}] ->
-            line_number = get_line_number(content, start)
-            line_content = get_line_content(content, line_number)
-
-            # Determine severity based on operation type and context
-            severity = determine_operation_severity(operation, line_content)
-
-            # Extract surrounding context for better analysis
-            context = extract_code_context(content, start, length)
-
-            %{
-              type: warning_type,
-              severity: severity,
-              operation: operation,
-              file: file_path,
-              line: line_number,
-              message: generate_security_message(operation, severity, context),
-              context: context,
-              line_content: String.trim(line_content)
-            }
-          end)
-      end
+      scan_single_pattern_for_warnings(pattern, operation, content, file_path, warning_type)
     end)
+  end
+
+  defp scan_single_pattern_for_warnings(pattern, operation, content, file_path, warning_type) do
+    case Regex.scan(pattern, content, return: :index) do
+      [] ->
+        []
+
+      matches ->
+        Enum.map(matches, fn [{start, length}] ->
+          build_pattern_warning(start, length, operation, content, file_path, warning_type)
+        end)
+    end
+  end
+
+  defp build_pattern_warning(start, length, operation, content, file_path, warning_type) do
+    line_number = get_line_number(content, start)
+    line_content = get_line_content(content, line_number)
+    severity = determine_operation_severity(operation, line_content)
+    context = extract_code_context(content, start, length)
+
+    %{
+      type: warning_type,
+      severity: severity,
+      operation: operation,
+      file: file_path,
+      line: line_number,
+      message: generate_security_message(operation, severity, context),
+      context: context,
+      line_content: String.trim(line_content)
+    }
   end
 
   defp scan_patterns_for_warnings(content, file_path, patterns, warning_type) do
@@ -2413,35 +2468,34 @@ defmodule Sandbox.IsolatedCompiler do
   end
 
   defp generate_security_message(operation, severity, context) do
-    base_message =
-      case operation do
-        :system_command -> "System command execution detected"
-        :shell_command -> "Shell command execution detected"
-        :code_evaluation -> "Dynamic code evaluation detected"
-        :file_deletion -> "File deletion operation detected"
-        :recursive_deletion -> "Recursive file deletion detected"
-        :network_access -> "Network access operation detected"
-        :database_operation -> "Database operation detected"
-        :cryptographic_operation -> "Cryptographic operation detected"
-        _ -> "Potentially unsafe operation: #{operation}"
-      end
-
-    severity_note =
-      case severity do
-        :critical -> " [CRITICAL RISK]"
-        :high -> " [HIGH RISK]"
-        :medium -> " [MEDIUM RISK]"
-        :low -> " [LOW RISK]"
-      end
-
-    context_note =
-      if String.length(context.surrounding_code) > 0 do
-        " - Context: #{String.slice(context.surrounding_code, 0, 50)}..."
-      else
-        ""
-      end
+    base_message = operation_to_message(operation)
+    severity_note = severity_to_note(severity)
+    context_note = format_context_note(context)
 
     base_message <> severity_note <> context_note
+  end
+
+  defp operation_to_message(:system_command), do: "System command execution detected"
+  defp operation_to_message(:shell_command), do: "Shell command execution detected"
+  defp operation_to_message(:code_evaluation), do: "Dynamic code evaluation detected"
+  defp operation_to_message(:file_deletion), do: "File deletion operation detected"
+  defp operation_to_message(:recursive_deletion), do: "Recursive file deletion detected"
+  defp operation_to_message(:network_access), do: "Network access operation detected"
+  defp operation_to_message(:database_operation), do: "Database operation detected"
+  defp operation_to_message(:cryptographic_operation), do: "Cryptographic operation detected"
+  defp operation_to_message(operation), do: "Potentially unsafe operation: #{operation}"
+
+  defp severity_to_note(:critical), do: " [CRITICAL RISK]"
+  defp severity_to_note(:high), do: " [HIGH RISK]"
+  defp severity_to_note(:medium), do: " [MEDIUM RISK]"
+  defp severity_to_note(:low), do: " [LOW RISK]"
+
+  defp format_context_note(context) do
+    if String.length(context.surrounding_code) > 0 do
+      " - Context: #{String.slice(context.surrounding_code, 0, 50)}..."
+    else
+      ""
+    end
   end
 
   defp extract_code_context(content, start, length) do
@@ -2484,18 +2538,16 @@ defmodule Sandbox.IsolatedCompiler do
   end
 
   defp validate_beam_file_security(beam_file) do
-    try do
-      case :beam_lib.info(String.to_charlist(beam_file)) do
-        {:error, :beam_lib, reason} ->
-          {:error, "Invalid BEAM file: #{inspect(reason)}"}
+    case :beam_lib.info(String.to_charlist(beam_file)) do
+      {:error, :beam_lib, reason} ->
+        {:error, "Invalid BEAM file: #{inspect(reason)}"}
 
-        info when is_list(info) ->
-          # Additional security checks on BEAM file
-          check_beam_security(beam_file, info)
-      end
-    rescue
-      error -> {:error, "BEAM validation error: #{inspect(error)}"}
+      info when is_list(info) ->
+        # Additional security checks on BEAM file
+        check_beam_security(beam_file, info)
     end
+  rescue
+    error -> {:error, "BEAM validation error: #{inspect(error)}"}
   end
 
   defp check_beam_security(_beam_file, _info) do
@@ -2529,19 +2581,14 @@ defmodule Sandbox.IsolatedCompiler do
   end
 
   defp check_mix_test_env do
+    # credo:disable-for-next-line Credo.Check.Refactor.Apply
     Code.ensure_loaded?(Mix) && function_exported?(Mix, :env, 0) && apply(Mix, :env, []) == :test
   end
 
   defp format_in_process_output(beam_files, warnings) do
-    beam_info =
-      beam_files
-      |> Enum.map(&"Generated #{&1}")
-      |> Enum.join("\n")
+    beam_info = Enum.map_join(beam_files, "\n", &"Generated #{&1}")
 
-    warning_info =
-      warnings
-      |> Enum.map(&format_warning_message/1)
-      |> Enum.join("\n")
+    warning_info = Enum.map_join(warnings, "\n", &format_warning_message/1)
 
     [beam_info, warning_info]
     |> Enum.reject(&(&1 == ""))
@@ -2549,15 +2596,9 @@ defmodule Sandbox.IsolatedCompiler do
   end
 
   defp format_in_process_errors(errors, warnings) do
-    error_info =
-      errors
-      |> Enum.map(&format_error_message/1)
-      |> Enum.join("\n")
+    error_info = Enum.map_join(errors, "\n", &format_error_message/1)
 
-    warning_info =
-      warnings
-      |> Enum.map(&format_warning_message/1)
-      |> Enum.join("\n")
+    warning_info = Enum.map_join(warnings, "\n", &format_warning_message/1)
 
     [error_info, warning_info]
     |> Enum.reject(&(&1 == ""))
