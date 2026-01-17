@@ -54,4 +54,7 @@ ExUnit.start()
 Application.ensure_all_started(:supertester)
 
 # Ensure the sandbox application is started
-{:ok, _} = Application.ensure_all_started(:sandbox)
+_log =
+  ExUnit.CaptureLog.capture_log(fn ->
+    {:ok, _} = Application.ensure_all_started(:sandbox)
+  end)

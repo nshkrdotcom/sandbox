@@ -13,6 +13,8 @@ defmodule Sandbox.ManagerCase do
         logger_isolation: unquote(logger_isolation),
         ets_isolation: unquote(ets_isolation)
 
+      @moduletag :capture_log
+
       import Sandbox.TestHelpers
       import Supertester.Assertions
       import Supertester.GenServerHelpers

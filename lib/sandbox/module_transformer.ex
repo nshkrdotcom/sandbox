@@ -44,11 +44,17 @@ defmodule Sandbox.ModuleTransformer do
       # Parse the source code into AST
       case Code.string_to_quoted(source_code) do
         {:ok, ast} ->
-          {transformed_ast, module_mapping} =
-            transform_ast(ast, namespace_prefix, preserve_stdlib)
+          case validate_defmodule_blocks(ast) do
+            :ok ->
+              {transformed_ast, module_mapping} =
+                transform_ast(ast, namespace_prefix, preserve_stdlib)
 
-          transformed_code = Macro.to_string(transformed_ast)
-          {:ok, transformed_code, module_mapping}
+              transformed_code = Macro.to_string(transformed_ast)
+              {:ok, transformed_code, module_mapping}
+
+            {:error, line} ->
+              {:error, {:parse_error, line, :missing_do, []}}
+          end
 
         {:error, {line, error, token}} ->
           {:error, {:parse_error, line, error, token}}
@@ -151,6 +157,14 @@ defmodule Sandbox.ModuleTransformer do
     # Store both directions of the mapping
     :ets.insert(table_name, {original_name, transformed_name})
     :ets.insert(table_name, {transformed_name, original_name})
+
+    prefixed_original = ensure_elixir_prefix(original_name)
+    prefixed_transformed = ensure_elixir_prefix(transformed_name)
+
+    if prefixed_original != original_name or prefixed_transformed != transformed_name do
+      :ets.insert(table_name, {prefixed_original, prefixed_transformed})
+      :ets.insert(table_name, {prefixed_transformed, prefixed_original})
+    end
 
     Logger.debug("Registered module mapping: #{original_name} <-> #{transformed_name}")
   end
@@ -288,6 +302,32 @@ defmodule Sandbox.ModuleTransformer do
     # For all other nodes, leave unchanged
     {node, mapping}
   end
+
+  defp validate_defmodule_blocks(ast) do
+    {_ast, result} =
+      Macro.prewalk(ast, :ok, fn
+        {:defmodule, meta, args} = node, :ok ->
+          if valid_defmodule_args?(args) do
+            {node, :ok}
+          else
+            {node, {:error, meta}}
+          end
+
+        node, acc ->
+          {node, acc}
+      end)
+
+    case result do
+      :ok -> :ok
+      {:error, meta} -> {:error, meta[:line] || 0}
+    end
+  end
+
+  defp valid_defmodule_args?([_module, args]) when is_list(args) do
+    Keyword.keyword?(args) and Keyword.has_key?(args, :do)
+  end
+
+  defp valid_defmodule_args?(_args), do: false
 
   defp module_alias_to_atom({:__aliases__, _, parts}) do
     parts
@@ -427,6 +467,16 @@ defmodule Sandbox.ModuleTransformer do
     unique_suffix = :erlang.phash2({timestamp, unique_id, self()}) |> abs()
 
     "Sandbox_#{sanitized_id}_#{unique_suffix}"
+  end
+
+  defp ensure_elixir_prefix(module) when is_atom(module) do
+    module_str = Atom.to_string(module)
+
+    if String.starts_with?(module_str, "Elixir.") do
+      module
+    else
+      String.to_atom("Elixir." <> module_str)
+    end
   end
 
   defp module_registry_table_name(sandbox_id, opts) do

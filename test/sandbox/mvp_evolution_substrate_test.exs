@@ -48,7 +48,11 @@ defmodule Sandbox.MvpEvolutionSubstrateTest do
         server: manager
       )
 
-    on_exit(fn -> Manager.destroy_sandbox(sandbox_id, server: manager) end)
+    on_exit(fn ->
+      ExUnit.CaptureLog.capture_log(fn ->
+        Manager.destroy_sandbox(sandbox_id, server: manager)
+      end)
+    end)
 
     sandbox_id
   end
@@ -204,7 +208,11 @@ defmodule Sandbox.MvpEvolutionSubstrateTest do
 
     results = Sandbox.batch_create(configs, server: manager)
 
-    on_exit(fn -> Manager.destroy_sandbox(sandbox_id, server: manager) end)
+    on_exit(fn ->
+      ExUnit.CaptureLog.capture_log(fn ->
+        Manager.destroy_sandbox(sandbox_id, server: manager)
+      end)
+    end)
 
     assert [{^sandbox_id, {:ok, _}}] = results
   end

@@ -153,7 +153,9 @@ defmodule Sandbox do
   @doc """
   Hot-reloads a sandbox using source code.
   """
-  def hot_reload_source(sandbox_id, source_code, opts \\ []) when is_binary(source_code) do
+  def hot_reload_source(sandbox_id, source_code, opts \\ [])
+
+  def hot_reload_source(sandbox_id, source_code, opts) when is_binary(source_code) do
     {server, call_opts} = split_server_opts(opts)
 
     case Manager.get_hot_reload_context(sandbox_id, server: server) do
@@ -175,7 +177,9 @@ defmodule Sandbox do
   @doc """
   Executes a function inside the sandbox execution context with a timeout.
   """
-  def run(sandbox_id, fun, opts \\ []) when is_function(fun, 0) do
+  def run(sandbox_id, fun, opts \\ [])
+
+  def run(sandbox_id, fun, opts) when is_function(fun, 0) do
     {server, run_opts} = split_server_opts(opts)
 
     case Manager.get_run_context(sandbox_id, server: server) do
