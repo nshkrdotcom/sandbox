@@ -6,16 +6,16 @@
 
 Isolated OTP application management with hot-reload capabilities for Elixir.
 
-Sandbox enables you to create, manage, and hot-reload isolated OTP applications (sandboxes) within your Elixir system. Each sandbox runs in complete isolation with its own supervision tree, making it perfect for plugin systems, learning environments, and safe code execution.
+Sandbox enables you to create, manage, and hot-reload isolated OTP applications (sandboxes) within your Elixir system. Each sandbox runs with its own supervision tree and namespace-transformed modules, providing process-level separation suitable for plugin systems, development workflows, and learning environments.
 
 ## Features
 
-- **True Isolation**: Each sandbox has its own supervision tree and process hierarchy
+- **Process Isolation**: Each sandbox has its own supervision tree and process hierarchy
 - **Hot Reload**: Update running sandboxes without restarting
 - **Version Management**: Track and rollback module versions
 - **Fault Tolerance**: Sandbox crashes don't affect the host application
 - **Resource Control**: Compile-time limits and process monitoring
-- **Safe Compilation**: Isolated compilation prevents affecting the host system
+- **Isolated Compilation**: Compile code in a separate process with configurable timeouts
 
 ## Documentation
 
@@ -139,7 +139,7 @@ When hot-reloading GenServers, you can provide custom state migration logic:
 
 ### Isolated Compilation
 
-Compile code in complete isolation:
+Compile code in a separate process with configurable timeouts:
 
 ```elixir
 # Compile a directory
@@ -161,7 +161,7 @@ compile_info.compilation_time # Time taken in milliseconds
 
 ### Plugin Systems
 
-Create a plugin system where each plugin runs in isolation:
+Create a plugin system where each plugin runs in its own supervision tree:
 
 ```elixir
 defmodule MyApp.PluginManager do
@@ -174,7 +174,7 @@ defmodule MyApp.PluginManager do
       sandbox_path: plugin_path
     )
     
-    # Plugin is now running in isolation
+    # Plugin is now running in its own supervision tree
   end
   
   def update_plugin(plugin_id, new_code_path) do
@@ -192,55 +192,25 @@ end
 
 ### Learning Environment
 
-Create isolated environments for learning OTP:
+Create separate environments for experimenting with OTP patterns:
 
 ```elixir
 defmodule LearningPlatform do
   def create_exercise_sandbox(user_id, exercise_code) do
     sandbox_id = "exercise_#{user_id}"
-    
+
     # Write exercise code to temporary directory
     temp_dir = Path.join(System.tmp_dir!(), sandbox_id)
     File.mkdir_p!(temp_dir)
     File.write!(Path.join(temp_dir, "exercise.ex"), exercise_code)
-    
+
     # Compile and run in sandbox
     {:ok, compile_info} = Sandbox.compile_sandbox(temp_dir)
     {:ok, _} = Sandbox.create_sandbox(sandbox_id, ExerciseSupervisor,
       sandbox_path: temp_dir
     )
-    
-    # Student's code is now running safely
-  end
-end
-```
 
-### Safe Code Execution
-
-Execute untrusted code safely:
-
-```elixir
-defmodule SafeExecutor do
-  def execute_untrusted_code(code_string) do
-    sandbox_id = "untrusted_#{:erlang.unique_integer()}"
-    
-    # Compile with restrictions
-    {:ok, compile_info} = Sandbox.compile_file(code_string,
-      timeout: 5_000,
-      memory_limit: 100 * 1024 * 1024  # 100MB
-    )
-    
-    # Run in sandbox with monitoring
-    {:ok, sandbox} = Sandbox.create_sandbox(sandbox_id, UntrustedSupervisor)
-    
-    # Execute and clean up
-    try do
-      # Run the untrusted code
-      {:ok, result} = run_in_sandbox(sandbox_id)
-      result
-    after
-      Sandbox.destroy_sandbox(sandbox_id)
-    end
+    # Student's code now runs in its own supervision tree
   end
 end
 ```
@@ -269,19 +239,27 @@ Each sandbox has its own supervision tree and can be hot-reloaded independently 
 
 ## Best Practices
 
-1. **Always validate untrusted code** before creating sandboxes
-2. **Set appropriate timeouts** for compilation and execution
-3. **Monitor sandbox resource usage** in production
-4. **Use version management** for safe rollbacks
-5. **Test state migration handlers** thoroughly
-6. **Clean up sandboxes** when no longer needed
+1. **Set appropriate timeouts** for compilation and execution
+2. **Monitor sandbox resource usage** in production
+3. **Use version management** for safe rollbacks
+4. **Test state migration handlers** thoroughly
+5. **Clean up sandboxes** when no longer needed
 
 ## Limitations
 
-- Sandboxes share the same VM, so they're not suitable for truly hostile code
-- Memory limits are advisory during compilation
-- Hot-reload requires proper GenServer implementation
-- Some BEAM instructions may affect the entire VM
+**This is not a security sandbox.** Sandboxes share the same Erlang VM and are not suitable for running untrusted or potentially malicious code. All sandboxes share:
+
+- The global code server and atom table
+- Memory address space
+- Scheduler infrastructure
+- Network and file system access
+
+Other limitations:
+
+- Memory and resource limits are advisory, not enforced
+- Security profiles audit operations but do not prevent them
+- Hot-reload requires proper GenServer `code_change/3` implementation
+- Some BEAM instructions can affect the entire VM
 
 ## Contributing
 
