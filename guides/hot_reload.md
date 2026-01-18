@@ -37,27 +37,61 @@ When you hot reload a module in a Sandbox:
 4. Module versions are tracked for potential rollback
 5. Dependencies are automatically detected and can be cascaded
 
-```
-┌─────────────────────────────────────────────────────────┐
-│                    Hot Reload Flow                       │
-├─────────────────────────────────────────────────────────┤
-│                                                          │
-│  1. New Code      2. Load Binary    3. State Migration   │
-│     ↓                 ↓                    ↓              │
-│  ┌──────┐        ┌──────────┐       ┌────────────┐       │
-│  │ BEAM │  ───▶  │ VM Code  │ ───▶  │  GenServer │       │
-│  │ Data │        │  Server  │       │   States   │       │
-│  └──────┘        └──────────┘       └────────────┘       │
-│                                            │              │
-│                   4. Version Tracked       ↓              │
-│                         ↓            ┌────────────┐       │
-│                  ┌──────────┐        │  Running   │       │
-│                  │ Version  │        │  with New  │       │
-│                  │ Manager  │        │    Code    │       │
-│                  └──────────┘        └────────────┘       │
-│                                                          │
-└─────────────────────────────────────────────────────────┘
-```
+<svg viewBox="0 0 640 280" xmlns="http://www.w3.org/2000/svg" style="max-width: 640px; font-family: system-ui, -apple-system, sans-serif;">
+  <defs>
+    <marker id="hot-arrow" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#3b82f6"/>
+    </marker>
+  </defs>
+
+  <!-- Main container -->
+  <rect x="0" y="0" width="640" height="280" rx="8" fill="#f8fafc" stroke="#e2e8f0" stroke-width="2"/>
+
+  <!-- Title -->
+  <rect x="0" y="0" width="640" height="36" rx="8" fill="#1e293b"/>
+  <rect x="0" y="20" width="640" height="16" fill="#1e293b"/>
+  <text x="320" y="24" text-anchor="middle" font-size="13" font-weight="600" fill="#fff">Hot Reload Flow</text>
+
+  <!-- Step labels -->
+  <text x="100" y="64" text-anchor="middle" font-size="10" font-weight="500" fill="#64748b">1. New Code</text>
+  <text x="280" y="64" text-anchor="middle" font-size="10" font-weight="500" fill="#64748b">2. Load Binary</text>
+  <text x="480" y="64" text-anchor="middle" font-size="10" font-weight="500" fill="#64748b">3. State Migration</text>
+
+  <!-- Step 1: BEAM Data -->
+  <rect x="48" y="80" width="104" height="56" rx="6" fill="#eff6ff" stroke="#3b82f6" stroke-width="1.5"/>
+  <text x="100" y="104" text-anchor="middle" font-size="11" font-weight="500" fill="#1e40af">BEAM</text>
+  <text x="100" y="120" text-anchor="middle" font-size="11" font-weight="500" fill="#1e40af">Data</text>
+
+  <!-- Arrow 1 to 2 -->
+  <line x1="152" y1="108" x2="192" y2="108" stroke="#3b82f6" stroke-width="2" marker-end="url(#hot-arrow)"/>
+
+  <!-- Step 2: VM Code Server -->
+  <rect x="208" y="80" width="144" height="56" rx="6" fill="#eff6ff" stroke="#3b82f6" stroke-width="1.5"/>
+  <text x="280" y="104" text-anchor="middle" font-size="11" font-weight="500" fill="#1e40af">VM Code</text>
+  <text x="280" y="120" text-anchor="middle" font-size="11" font-weight="500" fill="#1e40af">Server</text>
+
+  <!-- Arrow 2 to 3 -->
+  <line x1="352" y1="108" x2="392" y2="108" stroke="#3b82f6" stroke-width="2" marker-end="url(#hot-arrow)"/>
+
+  <!-- Step 3: GenServer States -->
+  <rect x="408" y="80" width="144" height="56" rx="6" fill="#eff6ff" stroke="#3b82f6" stroke-width="1.5"/>
+  <text x="480" y="104" text-anchor="middle" font-size="11" font-weight="500" fill="#1e40af">GenServer</text>
+  <text x="480" y="120" text-anchor="middle" font-size="11" font-weight="500" fill="#1e40af">States</text>
+
+  <!-- Arrow down from Step 3 -->
+  <line x1="480" y1="136" x2="480" y2="168" stroke="#3b82f6" stroke-width="2" marker-end="url(#hot-arrow)"/>
+
+  <!-- Step 4: Version Manager (left bottom) -->
+  <text x="220" y="168" text-anchor="middle" font-size="10" font-weight="500" fill="#64748b">4. Version Tracked</text>
+  <rect x="148" y="184" width="144" height="56" rx="6" fill="#f0fdf4" stroke="#10b981" stroke-width="1.5"/>
+  <text x="220" y="208" text-anchor="middle" font-size="11" font-weight="500" fill="#047857">Version</text>
+  <text x="220" y="224" text-anchor="middle" font-size="11" font-weight="500" fill="#047857">Manager</text>
+
+  <!-- Step 5: Running with New Code -->
+  <rect x="408" y="184" width="144" height="56" rx="6" fill="#fef3c7" stroke="#f59e0b" stroke-width="1.5"/>
+  <text x="480" y="204" text-anchor="middle" font-size="11" font-weight="500" fill="#b45309">Running</text>
+  <text x="480" y="220" text-anchor="middle" font-size="11" font-weight="500" fill="#b45309">with New Code</text>
+</svg>
 
 ---
 

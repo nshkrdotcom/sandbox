@@ -395,7 +395,7 @@ defmodule Demo.SandboxSkill do
     If processes > 10:
       1) take_snapshot()
       2) send_notification(type: "process_spike", severity: "warning",
-         summary: "process count elevated", snapshot_ids: ["<snapshot id>"])
+         summary: "process count elevated", snapshot_ids: ["latest"])
       3) set_state("warning", "process count above threshold")
       4) done()
 
@@ -704,7 +704,7 @@ Adjust with `process_load` or provide a custom `operator_context`.
 defaults to Anthropic when no provider is specified.
 
 Supported `BEAMLENS_DEMO_PROVIDER` values: `anthropic` (default), `google-ai`
-(alias: `gemini-ai`), `openai`, and `ollama`.
+(alias: `gemini-ai`), `openai`, `ollama`, and `mock` (deterministic/offline).
 
 Default (Anthropic):
 
@@ -722,8 +722,15 @@ export BEAMLENS_DEMO_MODEL="gemini-flash-lite-latest"
 mix run -e "Demo.CLI.run_anomaly()"
 ```
 
-You can also pass an explicit `client_registry:` in `Demo.CLI.run/1` or
-`Demo.CLI.run_anomaly/1` to bypass env selection.
+Mock (offline) example:
+
+```bash
+export BEAMLENS_DEMO_PROVIDER=mock
+mix run -e "Demo.CLI.run()"
+```
+
+You can also pass an explicit `client_registry:` or `puck_client:` in
+`Demo.CLI.run/1` or `Demo.CLI.run_anomaly/1` to bypass env selection.
 
 ### Expected Output
 
@@ -772,7 +779,7 @@ These failures are intentional guardrails to keep the demo honest.
 - `{:skill_snapshot_failed, "store_not_running"}` → ensure `Demo.SandboxSkill.Store` is started (it should be under `Demo.Application`).
 - `{:anomaly_state_mismatch, ...}` / `{:anomaly_notification_missing, ...}` → rerun with a stronger model via `BEAMLENS_DEMO_MODEL` or raise `operator_max_iterations`.
 - `{:anomaly_unexpected_notification, ...}` → ensure the spike is real by using `process_load` > 10 (default is 25).
-- Provider/auth errors → confirm `BEAMLENS_DEMO_PROVIDER` matches the API key env var (`GOOGLE_API_KEY`, `ANTHROPIC_API_KEY`, etc).
+- Provider/auth errors → confirm `BEAMLENS_DEMO_PROVIDER` matches the API key env var (`GOOGLE_API_KEY`, `ANTHROPIC_API_KEY`, etc), or use `mock` for offline runs.
 - Running tests from the repo root → use `mix test.examples`.
 
 ### Interactive Exploration

@@ -121,6 +121,7 @@ defmodule Demo.CLI do
 
   def run_operator(skill, opts) do
     client_registry = Keyword.get(opts, :client_registry, %{})
+    puck_client = Keyword.get(opts, :puck_client)
     context = Keyword.get(opts, :context, %{})
     timeout = Keyword.get(opts, :timeout, 30_000)
     max_iterations = Keyword.get(opts, :max_iterations, 2)
@@ -130,6 +131,7 @@ defmodule Demo.CLI do
              skill: skill,
              context: context,
              client_registry: client_registry,
+             puck_client: puck_client,
              max_iterations: max_iterations,
              notify_pid: self()
            ),
@@ -275,15 +277,18 @@ defmodule Demo.CLI do
   end
 
   defp build_operator_opts(opts, mode) do
-    case resolve_client_registry(opts) do
-      {:ok, client_registry} ->
-        {:ok,
-         [
-           context: operator_context_for(opts, mode),
-           client_registry: client_registry,
-           timeout: Keyword.get(opts, :operator_timeout, 30_000),
-           max_iterations: operator_max_iterations_for(opts, mode)
-         ]}
+    case resolve_client_context(opts, mode) do
+      {:ok, %{client_registry: client_registry, puck_client: puck_client}} ->
+        operator_opts = [
+          context: operator_context_for(opts, mode),
+          client_registry: client_registry,
+          timeout: Keyword.get(opts, :operator_timeout, 30_000),
+          max_iterations: operator_max_iterations_for(opts, mode)
+        ]
+
+        operator_opts = maybe_add_puck_client(operator_opts, puck_client)
+
+        {:ok, operator_opts}
 
       {:error, reason} ->
         {:error, reason}
@@ -321,14 +326,26 @@ defmodule Demo.CLI do
     Keyword.get(opts, :operator_max_iterations, 4)
   end
 
-  defp resolve_client_registry(opts) do
+  defp resolve_client_context(opts, mode) do
+    puck_client = Keyword.get(opts, :puck_client)
+
     case Keyword.fetch(opts, :client_registry) do
-      {:ok, registry} -> {:ok, registry}
-      :error -> build_client_registry_from_env()
+      {:ok, registry} ->
+        {:ok, %{client_registry: registry, puck_client: puck_client}}
+
+      :error ->
+        if puck_client do
+          {:ok, %{client_registry: %{}, puck_client: puck_client}}
+        else
+          build_client_context_from_env(mode)
+        end
     end
   end
 
-  defp build_client_registry_from_env do
+  defp maybe_add_puck_client(opts, nil), do: opts
+  defp maybe_add_puck_client(opts, puck_client), do: Keyword.put(opts, :puck_client, puck_client)
+
+  defp build_client_context_from_env(mode) do
     provider =
       System.get_env("BEAMLENS_DEMO_PROVIDER") ||
         System.get_env("BEAMLENS_TEST_PROVIDER") ||
@@ -342,23 +359,36 @@ defmodule Demo.CLI do
 
     case provider do
       "anthropic" ->
-        build_anthropic_registry(model_override)
+        with {:ok, registry} <- build_anthropic_registry(model_override) do
+          {:ok, %{client_registry: registry, puck_client: nil}}
+        end
 
       "openai" ->
-        build_openai_registry(model_override)
+        with {:ok, registry} <- build_openai_registry(model_override) do
+          {:ok, %{client_registry: registry, puck_client: nil}}
+        end
 
       "google-ai" ->
-        build_google_ai_registry(model_override)
+        with {:ok, registry} <- build_google_ai_registry(model_override) do
+          {:ok, %{client_registry: registry, puck_client: nil}}
+        end
 
       "gemini-ai" ->
-        build_google_ai_registry(model_override)
+        with {:ok, registry} <- build_google_ai_registry(model_override) do
+          {:ok, %{client_registry: registry, puck_client: nil}}
+        end
 
       "ollama" ->
-        build_ollama_registry(model_override)
+        with {:ok, registry} <- build_ollama_registry(model_override) do
+          {:ok, %{client_registry: registry, puck_client: nil}}
+        end
+
+      "mock" ->
+        {:ok, %{client_registry: %{}, puck_client: mock_puck_client_for(mode)}}
 
       _ ->
         {:error,
-         "Unknown provider: #{provider}. Use anthropic, openai, google-ai, gemini-ai, or ollama"}
+         "Unknown provider: #{provider}. Use anthropic, openai, google-ai, gemini-ai, ollama, or mock"}
     end
   end
 
@@ -366,7 +396,7 @@ defmodule Demo.CLI do
     case System.get_env("ANTHROPIC_API_KEY") do
       nil ->
         {:error,
-         "ANTHROPIC_API_KEY not set. Set it or choose BEAMLENS_DEMO_PROVIDER=google-ai (gemini-ai)"}
+         "ANTHROPIC_API_KEY not set. Set it or choose BEAMLENS_DEMO_PROVIDER=google-ai (gemini-ai), ollama, or mock"}
 
       _key ->
         model = model_override || "claude-haiku-4-5-20251001"
@@ -410,7 +440,8 @@ defmodule Demo.CLI do
   defp build_google_ai_registry(model_override) do
     case System.get_env("GOOGLE_API_KEY") do
       nil ->
-        {:error, "GOOGLE_API_KEY not set. Set it or use BEAMLENS_DEMO_PROVIDER=anthropic"}
+        {:error,
+         "GOOGLE_API_KEY not set. Set it or use BEAMLENS_DEMO_PROVIDER=anthropic, ollama, or mock"}
 
       _key ->
         model = model_override || "gemini-flash-lite-latest"
@@ -449,6 +480,47 @@ defmodule Demo.CLI do
       {:error, reason} ->
         {:error, "Ollama not available: #{reason}. Start with: ollama serve"}
     end
+  end
+
+  defp mock_puck_client_for(:anomaly) do
+    responses = [
+      %Beamlens.Operator.Tools.TakeSnapshot{intent: "take_snapshot"},
+      %Beamlens.Operator.Tools.SendNotification{
+        intent: "send_notification",
+        type: "process_spike",
+        summary: "process count elevated",
+        severity: :warning,
+        snapshot_ids: ["latest"]
+      },
+      %Beamlens.Operator.Tools.SetState{
+        intent: "set_state",
+        state: :warning,
+        reason: "process count above threshold"
+      },
+      %Beamlens.Operator.Tools.Done{intent: "done"}
+    ]
+
+    Beamlens.Testing.mock_client(
+      responses,
+      default: %Beamlens.Operator.Tools.Done{intent: "done"}
+    )
+  end
+
+  defp mock_puck_client_for(_mode) do
+    responses = [
+      %Beamlens.Operator.Tools.TakeSnapshot{intent: "take_snapshot"},
+      %Beamlens.Operator.Tools.SetState{
+        intent: "set_state",
+        state: :healthy,
+        reason: "process count normal"
+      },
+      %Beamlens.Operator.Tools.Done{intent: "done"}
+    ]
+
+    Beamlens.Testing.mock_client(
+      responses,
+      default: %Beamlens.Operator.Tools.Done{intent: "done"}
+    )
   end
 
   defp check_ollama_available do

@@ -19,75 +19,141 @@ The Sandbox library provides a comprehensive runtime isolation system for Elixir
 
 ### System Architecture Diagram
 
-```
-                                    +------------------+
-                                    |   Application    |
-                                    |     (Client)     |
-                                    +--------+---------+
-                                             |
-                                             v
-+------------------------------------------------------------------------------------+
-|                              Sandbox.Application                                    |
-|                                                                                    |
-|  +------------------+  Initializes ETS Tables  +-------------------------------+   |
-|  |  Telemetry       |<------------------------>|  ETS Tables                   |   |
-|  |  Events          |                          |  - sandbox_registry           |   |
-|  +------------------+                          |  - sandbox_modules            |   |
-|                                                |  - sandbox_resources          |   |
-|                                                |  - sandbox_security           |   |
-|                                                +-------------------------------+   |
-+------------------------------------------------------------------------------------+
-                                             |
-                                             v
-+------------------------------------------------------------------------------------+
-|                              Sandbox.Supervisor (one_for_one)                       |
-|                                                                                    |
-|  +----------------+  +---------------------+  +-------------------+                |
-|  |    Manager     |  | ModuleVersionManager|  | ProcessIsolator   |                |
-|  |  (GenServer)   |  |    (GenServer)      |  |   (GenServer)     |                |
-|  +-------+--------+  +---------+-----------+  +---------+---------+                |
-|          |                     |                        |                          |
-|          v                     v                        v                          |
-|  +----------------+  +---------------------+  +-------------------+                |
-|  | ResourceMonitor|  | SecurityController  |  |   FileWatcher     |                |
-|  |  (GenServer)   |  |    (GenServer)      |  |   (GenServer)     |                |
-|  +----------------+  +---------------------+  +-------------------+                |
-|                                                                                    |
-|  +-------------------+                                                             |
-|  | StatePreservation |                                                             |
-|  |    (GenServer)    |                                                             |
-|  +-------------------+                                                             |
-+------------------------------------------------------------------------------------+
-```
+<svg viewBox="0 0 720 480" xmlns="http://www.w3.org/2000/svg" style="max-width: 720px; font-family: system-ui, -apple-system, sans-serif;">
+  <defs>
+    <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#64748b"/>
+    </marker>
+  </defs>
+
+  <!-- Client Application -->
+  <rect x="280" y="16" width="160" height="48" rx="4" fill="#f8fafc" stroke="#e2e8f0" stroke-width="1.5"/>
+  <text x="360" y="36" text-anchor="middle" font-size="11" font-weight="600" fill="#334155">Application</text>
+  <text x="360" y="52" text-anchor="middle" font-size="10" fill="#64748b">(Client)</text>
+
+  <!-- Arrow to Sandbox.Application -->
+  <line x1="360" y1="64" x2="360" y2="88" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+
+  <!-- Sandbox.Application Container -->
+  <rect x="40" y="96" width="640" height="120" rx="6" fill="#f1f5f9" stroke="#cbd5e1" stroke-width="1.5"/>
+  <text x="360" y="116" text-anchor="middle" font-size="12" font-weight="600" fill="#1e293b">Sandbox.Application</text>
+
+  <!-- Telemetry Events -->
+  <rect x="64" y="132" width="140" height="56" rx="4" fill="#fff" stroke="#e2e8f0" stroke-width="1"/>
+  <text x="134" y="156" text-anchor="middle" font-size="10" font-weight="500" fill="#334155">Telemetry</text>
+  <text x="134" y="172" text-anchor="middle" font-size="10" fill="#64748b">Events</text>
+
+  <!-- Bidirectional arrow -->
+  <line x1="204" y1="160" x2="296" y2="160" stroke="#64748b" stroke-width="1" stroke-dasharray="4,2"/>
+  <text x="250" y="152" text-anchor="middle" font-size="8" fill="#94a3b8">Initializes ETS Tables</text>
+
+  <!-- ETS Tables -->
+  <rect x="304" y="128" width="352" height="72" rx="4" fill="#fff" stroke="#e2e8f0" stroke-width="1"/>
+  <text x="480" y="148" text-anchor="middle" font-size="10" font-weight="500" fill="#334155">ETS Tables</text>
+  <text x="400" y="166" text-anchor="start" font-size="9" fill="#64748b">• sandbox_registry</text>
+  <text x="400" y="180" text-anchor="start" font-size="9" fill="#64748b">• sandbox_modules</text>
+  <text x="520" y="166" text-anchor="start" font-size="9" fill="#64748b">• sandbox_resources</text>
+  <text x="520" y="180" text-anchor="start" font-size="9" fill="#64748b">• sandbox_security</text>
+
+  <!-- Arrow to Supervisor -->
+  <line x1="360" y1="216" x2="360" y2="244" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+
+  <!-- Sandbox.Supervisor Container -->
+  <rect x="40" y="252" width="640" height="212" rx="6" fill="#f1f5f9" stroke="#cbd5e1" stroke-width="1.5"/>
+  <text x="360" y="272" text-anchor="middle" font-size="12" font-weight="600" fill="#1e293b">Sandbox.Supervisor</text>
+  <text x="360" y="286" text-anchor="middle" font-size="9" fill="#64748b">(strategy: :one_for_one)</text>
+
+  <!-- Top row of GenServers -->
+  <rect x="64" y="300" width="120" height="52" rx="4" fill="#fff" stroke="#3b82f6" stroke-width="1.5"/>
+  <text x="124" y="322" text-anchor="middle" font-size="10" font-weight="500" fill="#1e40af">Manager</text>
+  <text x="124" y="338" text-anchor="middle" font-size="9" fill="#64748b">(GenServer)</text>
+
+  <rect x="200" y="300" width="160" height="52" rx="4" fill="#fff" stroke="#3b82f6" stroke-width="1.5"/>
+  <text x="280" y="322" text-anchor="middle" font-size="10" font-weight="500" fill="#1e40af">ModuleVersionManager</text>
+  <text x="280" y="338" text-anchor="middle" font-size="9" fill="#64748b">(GenServer)</text>
+
+  <rect x="376" y="300" width="140" height="52" rx="4" fill="#fff" stroke="#3b82f6" stroke-width="1.5"/>
+  <text x="446" y="322" text-anchor="middle" font-size="10" font-weight="500" fill="#1e40af">ProcessIsolator</text>
+  <text x="446" y="338" text-anchor="middle" font-size="9" fill="#64748b">(GenServer)</text>
+
+  <!-- Arrows down -->
+  <line x1="124" y1="352" x2="124" y2="372" stroke="#94a3b8" stroke-width="1"/>
+  <line x1="280" y1="352" x2="280" y2="372" stroke="#94a3b8" stroke-width="1"/>
+  <line x1="446" y1="352" x2="446" y2="372" stroke="#94a3b8" stroke-width="1"/>
+
+  <!-- Bottom row of GenServers -->
+  <rect x="64" y="380" width="120" height="52" rx="4" fill="#fff" stroke="#10b981" stroke-width="1.5"/>
+  <text x="124" y="402" text-anchor="middle" font-size="10" font-weight="500" fill="#047857">ResourceMonitor</text>
+  <text x="124" y="418" text-anchor="middle" font-size="9" fill="#64748b">(GenServer)</text>
+
+  <rect x="200" y="380" width="160" height="52" rx="4" fill="#fff" stroke="#10b981" stroke-width="1.5"/>
+  <text x="280" y="402" text-anchor="middle" font-size="10" font-weight="500" fill="#047857">SecurityController</text>
+  <text x="280" y="418" text-anchor="middle" font-size="9" fill="#64748b">(GenServer)</text>
+
+  <rect x="376" y="380" width="140" height="52" rx="4" fill="#fff" stroke="#10b981" stroke-width="1.5"/>
+  <text x="446" y="402" text-anchor="middle" font-size="10" font-weight="500" fill="#047857">FileWatcher</text>
+  <text x="446" y="418" text-anchor="middle" font-size="9" fill="#64748b">(GenServer)</text>
+
+  <rect x="532" y="380" width="132" height="52" rx="4" fill="#fff" stroke="#10b981" stroke-width="1.5"/>
+  <text x="598" y="402" text-anchor="middle" font-size="10" font-weight="500" fill="#047857">StatePreservation</text>
+  <text x="598" y="418" text-anchor="middle" font-size="9" fill="#64748b">(GenServer)</text>
+</svg>
 
 ### Component Interaction Flow
 
-```
-+-------------------+       +-------------------+       +-------------------+
-|                   |       |                   |       |                   |
-|  Client Request   +------>+     Manager       +------>+ ProcessIsolator   |
-|  (create_sandbox) |       |                   |       |                   |
-|                   |       +--------+----------+       +---------+---------+
-+-------------------+                |                            |
-                                     |                            |
-                                     v                            v
-                    +----------------+----------------+   +-------+--------+
-                    |                                 |   |                |
-                    |       +------------------+      |   | Isolated       |
-                    |       | ModuleVersion    |      |   | Supervisor     |
-                    |       | Manager          |      |   | Tree           |
-                    |       +------------------+      |   |                |
-                    |                                 |   +----------------+
-                    |       +------------------+      |
-                    |       | ResourceMonitor  |      |
-                    |       +------------------+      |
-                    |                                 |
-                    |       +------------------+      |
-                    |       | SecurityController|     |
-                    |       +------------------+      |
-                    |                                 |
-                    +---------------------------------+
-```
+<svg viewBox="0 0 680 320" xmlns="http://www.w3.org/2000/svg" style="max-width: 680px; font-family: system-ui, -apple-system, sans-serif;">
+  <defs>
+    <marker id="arrow-flow" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#3b82f6"/>
+    </marker>
+  </defs>
+
+  <!-- Client Request -->
+  <rect x="24" y="24" width="140" height="56" rx="4" fill="#eff6ff" stroke="#3b82f6" stroke-width="1.5"/>
+  <text x="94" y="48" text-anchor="middle" font-size="10" font-weight="500" fill="#1e40af">Client Request</text>
+  <text x="94" y="64" text-anchor="middle" font-size="9" fill="#64748b">(create_sandbox)</text>
+
+  <!-- Arrow to Manager -->
+  <line x1="164" y1="52" x2="204" y2="52" stroke="#3b82f6" stroke-width="1.5" marker-end="url(#arrow-flow)"/>
+
+  <!-- Manager -->
+  <rect x="212" y="24" width="140" height="56" rx="4" fill="#eff6ff" stroke="#3b82f6" stroke-width="1.5"/>
+  <text x="282" y="56" text-anchor="middle" font-size="10" font-weight="500" fill="#1e40af">Manager</text>
+
+  <!-- Arrow to ProcessIsolator -->
+  <line x1="352" y1="52" x2="392" y2="52" stroke="#3b82f6" stroke-width="1.5" marker-end="url(#arrow-flow)"/>
+
+  <!-- ProcessIsolator -->
+  <rect x="400" y="24" width="140" height="56" rx="4" fill="#eff6ff" stroke="#3b82f6" stroke-width="1.5"/>
+  <text x="470" y="56" text-anchor="middle" font-size="10" font-weight="500" fill="#1e40af">ProcessIsolator</text>
+
+  <!-- Arrow down from Manager -->
+  <line x1="282" y1="80" x2="282" y2="116" stroke="#64748b" stroke-width="1.5"/>
+
+  <!-- Arrow down from ProcessIsolator -->
+  <line x1="470" y1="80" x2="470" y2="116" stroke="#64748b" stroke-width="1.5"/>
+
+  <!-- Sub-components container -->
+  <rect x="180" y="124" width="220" height="172" rx="6" fill="#f8fafc" stroke="#e2e8f0" stroke-width="1"/>
+
+  <!-- ModuleVersionManager -->
+  <rect x="204" y="144" width="168" height="36" rx="4" fill="#fff" stroke="#10b981" stroke-width="1"/>
+  <text x="288" y="166" text-anchor="middle" font-size="10" font-weight="500" fill="#047857">ModuleVersionManager</text>
+
+  <!-- ResourceMonitor -->
+  <rect x="204" y="192" width="168" height="36" rx="4" fill="#fff" stroke="#10b981" stroke-width="1"/>
+  <text x="288" y="214" text-anchor="middle" font-size="10" font-weight="500" fill="#047857">ResourceMonitor</text>
+
+  <!-- SecurityController -->
+  <rect x="204" y="240" width="168" height="36" rx="4" fill="#fff" stroke="#10b981" stroke-width="1"/>
+  <text x="288" y="262" text-anchor="middle" font-size="10" font-weight="500" fill="#047857">SecurityController</text>
+
+  <!-- Isolated Supervisor Tree -->
+  <rect x="424" y="124" width="152" height="80" rx="6" fill="#fef3c7" stroke="#f59e0b" stroke-width="1.5"/>
+  <text x="500" y="156" text-anchor="middle" font-size="10" font-weight="500" fill="#b45309">Isolated</text>
+  <text x="500" y="172" text-anchor="middle" font-size="10" font-weight="500" fill="#b45309">Supervisor</text>
+  <text x="500" y="188" text-anchor="middle" font-size="10" font-weight="500" fill="#b45309">Tree</text>
+</svg>
 
 ---
 
@@ -185,15 +251,31 @@ Implements process-level isolation where each sandbox runs in its own isolated p
 
 #### Isolation Levels
 
-```
-+------------------+-----------------------------------------------------+
-|  Isolation Level |  Configuration                                      |
-+------------------+-----------------------------------------------------+
-|  :strict         |  max_heap: 64MB, off_heap messages, low priority    |
-|  :medium         |  max_heap: 128MB, on_heap messages, normal priority |
-|  :relaxed        |  No heap limits, default settings                   |
-+------------------+-----------------------------------------------------+
-```
+<svg viewBox="0 0 600 140" xmlns="http://www.w3.org/2000/svg" style="max-width: 600px; font-family: system-ui, -apple-system, sans-serif;">
+  <!-- Header row -->
+  <rect x="0" y="0" width="120" height="36" fill="#1e293b"/>
+  <rect x="120" y="0" width="480" height="36" fill="#1e293b"/>
+  <text x="60" y="22" text-anchor="middle" font-size="11" font-weight="600" fill="#fff">Isolation Level</text>
+  <text x="360" y="22" text-anchor="middle" font-size="11" font-weight="600" fill="#fff">Configuration</text>
+
+  <!-- :strict row -->
+  <rect x="0" y="36" width="120" height="32" fill="#fef2f2" stroke="#fecaca" stroke-width="1"/>
+  <rect x="120" y="36" width="480" height="32" fill="#fff" stroke="#e2e8f0" stroke-width="1"/>
+  <text x="60" y="56" text-anchor="middle" font-size="10" font-weight="600" fill="#dc2626">:strict</text>
+  <text x="360" y="56" text-anchor="middle" font-size="10" fill="#475569">max_heap: 64MB, off_heap messages, low priority</text>
+
+  <!-- :medium row -->
+  <rect x="0" y="68" width="120" height="32" fill="#fefce8" stroke="#fef08a" stroke-width="1"/>
+  <rect x="120" y="68" width="480" height="32" fill="#fff" stroke="#e2e8f0" stroke-width="1"/>
+  <text x="60" y="88" text-anchor="middle" font-size="10" font-weight="600" fill="#ca8a04">:medium</text>
+  <text x="360" y="88" text-anchor="middle" font-size="10" fill="#475569">max_heap: 128MB, on_heap messages, normal priority</text>
+
+  <!-- :relaxed row -->
+  <rect x="0" y="100" width="120" height="32" fill="#f0fdf4" stroke="#bbf7d0" stroke-width="1"/>
+  <rect x="120" y="100" width="480" height="32" fill="#fff" stroke="#e2e8f0" stroke-width="1"/>
+  <text x="60" y="120" text-anchor="middle" font-size="10" font-weight="600" fill="#16a34a">:relaxed</text>
+  <text x="360" y="120" text-anchor="middle" font-size="10" fill="#475569">No heap limits, default settings</text>
+</svg>
 
 #### Key API Functions
 
@@ -301,23 +383,46 @@ Provides security controls and code analysis for safe execution within sandboxes
 
 #### Security Profiles
 
-```
-+----------+-----------------------------------------------------------+
-|  Profile |  Configuration                                            |
-+----------+-----------------------------------------------------------+
-|  :high   |  Restricted: file, os, code, system, port, node          |
-|          |  Allowed: basic_otp, math, string                         |
-|          |  Audit: full                                              |
-+----------+-----------------------------------------------------------+
-|  :medium |  Restricted: os, port, node                               |
-|          |  Allowed: basic_otp, math, string, processes              |
-|          |  Audit: basic                                             |
-+----------+-----------------------------------------------------------+
-|  :low    |  Restricted: none                                         |
-|          |  Allowed: all                                              |
-|          |  Audit: basic                                             |
-+----------+-----------------------------------------------------------+
-```
+<svg viewBox="0 0 640 220" xmlns="http://www.w3.org/2000/svg" style="max-width: 640px; font-family: system-ui, -apple-system, sans-serif;">
+  <!-- Header row -->
+  <rect x="0" y="0" width="80" height="36" fill="#1e293b"/>
+  <rect x="80" y="0" width="560" height="36" fill="#1e293b"/>
+  <text x="40" y="22" text-anchor="middle" font-size="11" font-weight="600" fill="#fff">Profile</text>
+  <text x="360" y="22" text-anchor="middle" font-size="11" font-weight="600" fill="#fff">Configuration</text>
+
+  <!-- :high row -->
+  <rect x="0" y="36" width="80" height="56" fill="#fef2f2" stroke="#fecaca" stroke-width="1"/>
+  <rect x="80" y="36" width="560" height="56" fill="#fff" stroke="#e2e8f0" stroke-width="1"/>
+  <text x="40" y="68" text-anchor="middle" font-size="10" font-weight="600" fill="#dc2626">:high</text>
+  <text x="96" y="52" text-anchor="start" font-size="9" fill="#64748b">Restricted:</text>
+  <text x="156" y="52" text-anchor="start" font-size="9" fill="#475569">file, os, code, system, port, node</text>
+  <text x="96" y="66" text-anchor="start" font-size="9" fill="#64748b">Allowed:</text>
+  <text x="156" y="66" text-anchor="start" font-size="9" fill="#475569">basic_otp, math, string</text>
+  <text x="96" y="80" text-anchor="start" font-size="9" fill="#64748b">Audit:</text>
+  <text x="156" y="80" text-anchor="start" font-size="9" fill="#475569">full</text>
+
+  <!-- :medium row -->
+  <rect x="0" y="92" width="80" height="56" fill="#fefce8" stroke="#fef08a" stroke-width="1"/>
+  <rect x="80" y="92" width="560" height="56" fill="#fff" stroke="#e2e8f0" stroke-width="1"/>
+  <text x="40" y="124" text-anchor="middle" font-size="10" font-weight="600" fill="#ca8a04">:medium</text>
+  <text x="96" y="108" text-anchor="start" font-size="9" fill="#64748b">Restricted:</text>
+  <text x="156" y="108" text-anchor="start" font-size="9" fill="#475569">os, port, node</text>
+  <text x="96" y="122" text-anchor="start" font-size="9" fill="#64748b">Allowed:</text>
+  <text x="156" y="122" text-anchor="start" font-size="9" fill="#475569">basic_otp, math, string, processes</text>
+  <text x="96" y="136" text-anchor="start" font-size="9" fill="#64748b">Audit:</text>
+  <text x="156" y="136" text-anchor="start" font-size="9" fill="#475569">basic</text>
+
+  <!-- :low row -->
+  <rect x="0" y="148" width="80" height="56" fill="#f0fdf4" stroke="#bbf7d0" stroke-width="1"/>
+  <rect x="80" y="148" width="560" height="56" fill="#fff" stroke="#e2e8f0" stroke-width="1"/>
+  <text x="40" y="180" text-anchor="middle" font-size="10" font-weight="600" fill="#16a34a">:low</text>
+  <text x="96" y="164" text-anchor="start" font-size="9" fill="#64748b">Restricted:</text>
+  <text x="156" y="164" text-anchor="start" font-size="9" fill="#475569">none</text>
+  <text x="96" y="178" text-anchor="start" font-size="9" fill="#64748b">Allowed:</text>
+  <text x="156" y="178" text-anchor="start" font-size="9" fill="#475569">all</text>
+  <text x="96" y="192" text-anchor="start" font-size="9" fill="#64748b">Audit:</text>
+  <text x="156" y="192" text-anchor="start" font-size="9" fill="#475569">basic</text>
+</svg>
 
 #### Key API Functions
 
@@ -407,101 +512,197 @@ ModuleVersionManager.cascading_reload(sandbox_id, modules, opts)
 
 ### Sandbox Creation Flow
 
-```
-Client                Manager              ProcessIsolator       ResourceMonitor
-  |                      |                       |                      |
-  |  create_sandbox()    |                       |                      |
-  |--------------------->|                       |                      |
-  |                      |                       |                      |
-  |                      |  validate_config()    |                      |
-  |                      |--+                    |                      |
-  |                      |  |                    |                      |
-  |                      |<-+                    |                      |
-  |                      |                       |                      |
-  |                      | create_isolated_context()                    |
-  |                      |---------------------->|                      |
-  |                      |                       |                      |
-  |                      |                       |  spawn_isolated_process()
-  |                      |                       |--+                   |
-  |                      |                       |  |                   |
-  |                      |                       |<-+                   |
-  |                      |                       |                      |
-  |                      |   {:ok, context}      |                      |
-  |                      |<----------------------|                      |
-  |                      |                       |                      |
-  |                      |                register_sandbox()            |
-  |                      |-------------------------------------------->|
-  |                      |                       |                      |
-  |                      |                       |       :ok            |
-  |                      |<--------------------------------------------|
-  |                      |                       |                      |
-  |  {:ok, sandbox_info} |                       |                      |
-  |<---------------------|                       |                      |
-```
+<svg viewBox="0 0 700 420" xmlns="http://www.w3.org/2000/svg" style="max-width: 700px; font-family: system-ui, -apple-system, sans-serif;">
+  <defs>
+    <marker id="seq-arrow" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#3b82f6"/>
+    </marker>
+    <marker id="seq-arrow-return" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#10b981"/>
+    </marker>
+  </defs>
+
+  <!-- Participant headers -->
+  <rect x="40" y="16" width="80" height="32" rx="4" fill="#eff6ff" stroke="#3b82f6" stroke-width="1.5"/>
+  <text x="80" y="36" text-anchor="middle" font-size="10" font-weight="500" fill="#1e40af">Client</text>
+
+  <rect x="200" y="16" width="80" height="32" rx="4" fill="#eff6ff" stroke="#3b82f6" stroke-width="1.5"/>
+  <text x="240" y="36" text-anchor="middle" font-size="10" font-weight="500" fill="#1e40af">Manager</text>
+
+  <rect x="360" y="16" width="100" height="32" rx="4" fill="#eff6ff" stroke="#3b82f6" stroke-width="1.5"/>
+  <text x="410" y="36" text-anchor="middle" font-size="10" font-weight="500" fill="#1e40af">ProcessIsolator</text>
+
+  <rect x="540" y="16" width="100" height="32" rx="4" fill="#eff6ff" stroke="#3b82f6" stroke-width="1.5"/>
+  <text x="590" y="36" text-anchor="middle" font-size="10" font-weight="500" fill="#1e40af">ResourceMonitor</text>
+
+  <!-- Lifelines -->
+  <line x1="80" y1="48" x2="80" y2="400" stroke="#cbd5e1" stroke-width="1" stroke-dasharray="4,3"/>
+  <line x1="240" y1="48" x2="240" y2="400" stroke="#cbd5e1" stroke-width="1" stroke-dasharray="4,3"/>
+  <line x1="410" y1="48" x2="410" y2="400" stroke="#cbd5e1" stroke-width="1" stroke-dasharray="4,3"/>
+  <line x1="590" y1="48" x2="590" y2="400" stroke="#cbd5e1" stroke-width="1" stroke-dasharray="4,3"/>
+
+  <!-- Message 1: create_sandbox() -->
+  <line x1="80" y1="80" x2="232" y2="80" stroke="#3b82f6" stroke-width="1.5" marker-end="url(#seq-arrow)"/>
+  <text x="156" y="72" text-anchor="middle" font-size="9" fill="#1e40af">create_sandbox()</text>
+
+  <!-- Message 2: validate_config() - self call -->
+  <line x1="240" y1="110" x2="280" y2="110" stroke="#64748b" stroke-width="1"/>
+  <line x1="280" y1="110" x2="280" y2="130" stroke="#64748b" stroke-width="1"/>
+  <line x1="280" y1="130" x2="248" y2="130" stroke="#64748b" stroke-width="1" marker-end="url(#seq-arrow)"/>
+  <text x="296" y="124" text-anchor="start" font-size="9" fill="#475569">validate_config()</text>
+
+  <!-- Message 3: create_isolated_context() -->
+  <line x1="240" y1="160" x2="402" y2="160" stroke="#3b82f6" stroke-width="1.5" marker-end="url(#seq-arrow)"/>
+  <text x="321" y="152" text-anchor="middle" font-size="9" fill="#1e40af">create_isolated_context()</text>
+
+  <!-- Message 4: spawn_isolated_process() - self call -->
+  <line x1="410" y1="190" x2="450" y2="190" stroke="#64748b" stroke-width="1"/>
+  <line x1="450" y1="190" x2="450" y2="210" stroke="#64748b" stroke-width="1"/>
+  <line x1="450" y1="210" x2="418" y2="210" stroke="#64748b" stroke-width="1" marker-end="url(#seq-arrow)"/>
+  <text x="466" y="204" text-anchor="start" font-size="9" fill="#475569">spawn_isolated_process()</text>
+
+  <!-- Message 5: {:ok, context} return -->
+  <line x1="410" y1="245" x2="248" y2="245" stroke="#10b981" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#seq-arrow-return)"/>
+  <text x="329" y="237" text-anchor="middle" font-size="9" fill="#047857">{:ok, context}</text>
+
+  <!-- Message 6: register_sandbox() -->
+  <line x1="240" y1="280" x2="582" y2="280" stroke="#3b82f6" stroke-width="1.5" marker-end="url(#seq-arrow)"/>
+  <text x="411" y="272" text-anchor="middle" font-size="9" fill="#1e40af">register_sandbox()</text>
+
+  <!-- Message 7: :ok return -->
+  <line x1="590" y1="315" x2="248" y2="315" stroke="#10b981" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#seq-arrow-return)"/>
+  <text x="419" y="307" text-anchor="middle" font-size="9" fill="#047857">:ok</text>
+
+  <!-- Message 8: {:ok, sandbox_info} return -->
+  <line x1="240" y1="360" x2="88" y2="360" stroke="#10b981" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#seq-arrow-return)"/>
+  <text x="164" y="352" text-anchor="middle" font-size="9" fill="#047857">{:ok, sandbox_info}</text>
+</svg>
 
 ### Hot-Reload Flow
 
-```
-Client              Manager          ModuleVersionManager    StatePreservation
-  |                    |                      |                      |
-  |  hot_reload()      |                      |                      |
-  |------------------>|                      |                      |
-  |                    |                      |                      |
-  |                    |  hot_swap_module()   |                      |
-  |                    |--------------------->|                      |
-  |                    |                      |                      |
-  |                    |                      | capture_module_states()
-  |                    |                      |--------------------->|
-  |                    |                      |                      |
-  |                    |                      |   {:ok, states}      |
-  |                    |                      |<---------------------|
-  |                    |                      |                      |
-  |                    |                      | :code.load_binary()  |
-  |                    |                      |--+                   |
-  |                    |                      |  |                   |
-  |                    |                      |<-+                   |
-  |                    |                      |                      |
-  |                    |                      | restore_states()     |
-  |                    |                      |--------------------->|
-  |                    |                      |                      |
-  |                    |                      |   {:ok, :restored}   |
-  |                    |                      |<---------------------|
-  |                    |                      |                      |
-  |                    | {:ok, :hot_swapped}  |                      |
-  |                    |<---------------------|                      |
-  |                    |                      |                      |
-  | {:ok, :hot_reloaded}                      |                      |
-  |<-------------------|                      |                      |
-```
+<svg viewBox="0 0 720 480" xmlns="http://www.w3.org/2000/svg" style="max-width: 720px; font-family: system-ui, -apple-system, sans-serif;">
+  <defs>
+    <marker id="hr-arrow" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#3b82f6"/>
+    </marker>
+    <marker id="hr-arrow-return" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#10b981"/>
+    </marker>
+  </defs>
+
+  <!-- Participant headers -->
+  <rect x="32" y="16" width="72" height="32" rx="4" fill="#eff6ff" stroke="#3b82f6" stroke-width="1.5"/>
+  <text x="68" y="36" text-anchor="middle" font-size="10" font-weight="500" fill="#1e40af">Client</text>
+
+  <rect x="168" y="16" width="80" height="32" rx="4" fill="#eff6ff" stroke="#3b82f6" stroke-width="1.5"/>
+  <text x="208" y="36" text-anchor="middle" font-size="10" font-weight="500" fill="#1e40af">Manager</text>
+
+  <rect x="328" y="16" width="140" height="32" rx="4" fill="#eff6ff" stroke="#3b82f6" stroke-width="1.5"/>
+  <text x="398" y="36" text-anchor="middle" font-size="10" font-weight="500" fill="#1e40af">ModuleVersionManager</text>
+
+  <rect x="548" y="16" width="120" height="32" rx="4" fill="#eff6ff" stroke="#3b82f6" stroke-width="1.5"/>
+  <text x="608" y="36" text-anchor="middle" font-size="10" font-weight="500" fill="#1e40af">StatePreservation</text>
+
+  <!-- Lifelines -->
+  <line x1="68" y1="48" x2="68" y2="460" stroke="#cbd5e1" stroke-width="1" stroke-dasharray="4,3"/>
+  <line x1="208" y1="48" x2="208" y2="460" stroke="#cbd5e1" stroke-width="1" stroke-dasharray="4,3"/>
+  <line x1="398" y1="48" x2="398" y2="460" stroke="#cbd5e1" stroke-width="1" stroke-dasharray="4,3"/>
+  <line x1="608" y1="48" x2="608" y2="460" stroke="#cbd5e1" stroke-width="1" stroke-dasharray="4,3"/>
+
+  <!-- Message 1: hot_reload() -->
+  <line x1="68" y1="80" x2="200" y2="80" stroke="#3b82f6" stroke-width="1.5" marker-end="url(#hr-arrow)"/>
+  <text x="134" y="72" text-anchor="middle" font-size="9" fill="#1e40af">hot_reload()</text>
+
+  <!-- Message 2: hot_swap_module() -->
+  <line x1="208" y1="115" x2="390" y2="115" stroke="#3b82f6" stroke-width="1.5" marker-end="url(#hr-arrow)"/>
+  <text x="299" y="107" text-anchor="middle" font-size="9" fill="#1e40af">hot_swap_module()</text>
+
+  <!-- Message 3: capture_module_states() -->
+  <line x1="398" y1="150" x2="600" y2="150" stroke="#3b82f6" stroke-width="1.5" marker-end="url(#hr-arrow)"/>
+  <text x="499" y="142" text-anchor="middle" font-size="9" fill="#1e40af">capture_module_states()</text>
+
+  <!-- Message 4: {:ok, states} return -->
+  <line x1="608" y1="185" x2="406" y2="185" stroke="#10b981" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#hr-arrow-return)"/>
+  <text x="507" y="177" text-anchor="middle" font-size="9" fill="#047857">{:ok, states}</text>
+
+  <!-- Message 5: :code.load_binary() - self call -->
+  <line x1="398" y1="220" x2="444" y2="220" stroke="#64748b" stroke-width="1"/>
+  <line x1="444" y1="220" x2="444" y2="245" stroke="#64748b" stroke-width="1"/>
+  <line x1="444" y1="245" x2="406" y2="245" stroke="#64748b" stroke-width="1" marker-end="url(#hr-arrow)"/>
+  <text x="462" y="236" text-anchor="start" font-size="9" fill="#475569">:code.load_binary()</text>
+
+  <!-- Message 6: restore_states() -->
+  <line x1="398" y1="280" x2="600" y2="280" stroke="#3b82f6" stroke-width="1.5" marker-end="url(#hr-arrow)"/>
+  <text x="499" y="272" text-anchor="middle" font-size="9" fill="#1e40af">restore_states()</text>
+
+  <!-- Message 7: {:ok, :restored} return -->
+  <line x1="608" y1="315" x2="406" y2="315" stroke="#10b981" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#hr-arrow-return)"/>
+  <text x="507" y="307" text-anchor="middle" font-size="9" fill="#047857">{:ok, :restored}</text>
+
+  <!-- Message 8: {:ok, :hot_swapped} return -->
+  <line x1="398" y1="360" x2="216" y2="360" stroke="#10b981" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#hr-arrow-return)"/>
+  <text x="307" y="352" text-anchor="middle" font-size="9" fill="#047857">{:ok, :hot_swapped}</text>
+
+  <!-- Message 9: {:ok, :hot_reloaded} return -->
+  <line x1="208" y1="410" x2="76" y2="410" stroke="#10b981" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#hr-arrow-return)"/>
+  <text x="142" y="402" text-anchor="middle" font-size="9" fill="#047857">{:ok, :hot_reloaded}</text>
+</svg>
 
 ### Process Crash Handling Flow
 
-```
-Isolated Process         ProcessIsolator           Manager
-       |                        |                      |
-       | (crashes)              |                      |
-       X                        |                      |
-                                |                      |
-       {:DOWN, ref, ...}        |                      |
-       ----------------------->|                      |
-                                |                      |
-                                | cleanup_crashed_context()
-                                |--+                   |
-                                |  |                   |
-                                |<-+                   |
-                                |                      |
-                                |                      |
-       {:DOWN, ref, ...}        |                      |
-       ------------------------------------------->   |
-                                |                      |
-                                | handle_sandbox_crash()
-                                |                      |--+
-                                |                      |  |
-                                |                      |<-+
-                                |                      |
-                                | (cleanup ETS, monitors)
-                                |                      |
-```
+<svg viewBox="0 0 560 360" xmlns="http://www.w3.org/2000/svg" style="max-width: 560px; font-family: system-ui, -apple-system, sans-serif;">
+  <defs>
+    <marker id="crash-arrow" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#ef4444"/>
+    </marker>
+    <marker id="crash-arrow-gray" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#64748b"/>
+    </marker>
+  </defs>
+
+  <!-- Participant headers -->
+  <rect x="40" y="16" width="100" height="32" rx="4" fill="#fef2f2" stroke="#ef4444" stroke-width="1.5"/>
+  <text x="90" y="36" text-anchor="middle" font-size="10" font-weight="500" fill="#dc2626">Isolated Process</text>
+
+  <rect x="220" y="16" width="100" height="32" rx="4" fill="#eff6ff" stroke="#3b82f6" stroke-width="1.5"/>
+  <text x="270" y="36" text-anchor="middle" font-size="10" font-weight="500" fill="#1e40af">ProcessIsolator</text>
+
+  <rect x="400" y="16" width="100" height="32" rx="4" fill="#eff6ff" stroke="#3b82f6" stroke-width="1.5"/>
+  <text x="450" y="36" text-anchor="middle" font-size="10" font-weight="500" fill="#1e40af">Manager</text>
+
+  <!-- Lifelines -->
+  <line x1="90" y1="48" x2="90" y2="100" stroke="#cbd5e1" stroke-width="1" stroke-dasharray="4,3"/>
+  <line x1="270" y1="48" x2="270" y2="340" stroke="#cbd5e1" stroke-width="1" stroke-dasharray="4,3"/>
+  <line x1="450" y1="48" x2="450" y2="340" stroke="#cbd5e1" stroke-width="1" stroke-dasharray="4,3"/>
+
+  <!-- Crash indicator -->
+  <text x="90" y="88" text-anchor="middle" font-size="9" fill="#dc2626">(crashes)</text>
+  <text x="90" y="108" text-anchor="middle" font-size="16" font-weight="bold" fill="#ef4444">X</text>
+
+  <!-- Message 1: {:DOWN, ref, ...} to ProcessIsolator -->
+  <line x1="90" y1="140" x2="262" y2="140" stroke="#ef4444" stroke-width="1.5" marker-end="url(#crash-arrow)"/>
+  <text x="176" y="132" text-anchor="middle" font-size="9" fill="#dc2626">{:DOWN, ref, ...}</text>
+
+  <!-- Self call: cleanup_crashed_context() -->
+  <line x1="270" y1="170" x2="316" y2="170" stroke="#64748b" stroke-width="1"/>
+  <line x1="316" y1="170" x2="316" y2="195" stroke="#64748b" stroke-width="1"/>
+  <line x1="316" y1="195" x2="278" y2="195" stroke="#64748b" stroke-width="1" marker-end="url(#crash-arrow-gray)"/>
+  <text x="332" y="186" text-anchor="start" font-size="9" fill="#475569">cleanup_crashed_context()</text>
+
+  <!-- Message 2: {:DOWN, ref, ...} to Manager -->
+  <line x1="90" y1="230" x2="442" y2="230" stroke="#ef4444" stroke-width="1.5" marker-end="url(#crash-arrow)"/>
+  <text x="266" y="222" text-anchor="middle" font-size="9" fill="#dc2626">{:DOWN, ref, ...}</text>
+
+  <!-- Self call: handle_sandbox_crash() -->
+  <line x1="450" y1="260" x2="496" y2="260" stroke="#64748b" stroke-width="1"/>
+  <line x1="496" y1="260" x2="496" y2="285" stroke="#64748b" stroke-width="1"/>
+  <line x1="496" y1="285" x2="458" y2="285" stroke="#64748b" stroke-width="1" marker-end="url(#crash-arrow-gray)"/>
+  <text x="512" y="276" text-anchor="start" font-size="9" fill="#475569">handle_sandbox_crash()</text>
+
+  <!-- Note: cleanup ETS, monitors -->
+  <rect x="380" y="310" width="140" height="24" rx="4" fill="#f8fafc" stroke="#e2e8f0" stroke-width="1"/>
+  <text x="450" y="326" text-anchor="middle" font-size="9" fill="#64748b">(cleanup ETS, monitors)</text>
+</svg>
 
 ---
 
@@ -511,20 +712,79 @@ The Sandbox system uses multiple ETS tables for different purposes, all initiali
 
 ### Table Overview
 
-```
-+----------------------+-------------+------------------------------------------+
-|  Table Name          |  Type       |  Purpose                                 |
-+----------------------+-------------+------------------------------------------+
-|  sandbox_registry    |  set        |  Main registry for sandbox state/metadata|
-|  sandbox_modules     |  bag        |  Module version tracking and metadata    |
-|  sandbox_resources   |  set        |  Resource usage tracking                 |
-|  sandbox_security    |  ordered_set|  Security events and audit log           |
-|  sandboxes           |  set        |  Active sandbox information              |
-|  sandbox_monitors    |  set        |  Monitor reference to sandbox mappings   |
-|  isolation_contexts  |  set        |  Process isolation context data          |
-|  module_versions     |  bag        |  Module version history                  |
-+----------------------+-------------+------------------------------------------+
-```
+<svg viewBox="0 0 700 300" xmlns="http://www.w3.org/2000/svg" style="max-width: 700px; font-family: system-ui, -apple-system, sans-serif;">
+  <!-- Header row -->
+  <rect x="0" y="0" width="160" height="32" fill="#1e293b"/>
+  <rect x="160" y="0" width="100" height="32" fill="#1e293b"/>
+  <rect x="260" y="0" width="440" height="32" fill="#1e293b"/>
+  <text x="80" y="20" text-anchor="middle" font-size="10" font-weight="600" fill="#fff">Table Name</text>
+  <text x="210" y="20" text-anchor="middle" font-size="10" font-weight="600" fill="#fff">Type</text>
+  <text x="480" y="20" text-anchor="middle" font-size="10" font-weight="600" fill="#fff">Purpose</text>
+
+  <!-- Row 1 -->
+  <rect x="0" y="32" width="160" height="30" fill="#eff6ff" stroke="#e2e8f0" stroke-width="1"/>
+  <rect x="160" y="32" width="100" height="30" fill="#fff" stroke="#e2e8f0" stroke-width="1"/>
+  <rect x="260" y="32" width="440" height="30" fill="#fff" stroke="#e2e8f0" stroke-width="1"/>
+  <text x="80" y="52" text-anchor="middle" font-size="9" font-weight="500" fill="#1e40af">sandbox_registry</text>
+  <text x="210" y="52" text-anchor="middle" font-size="9" fill="#475569">set</text>
+  <text x="276" y="52" text-anchor="start" font-size="9" fill="#475569">Main registry for sandbox state/metadata</text>
+
+  <!-- Row 2 -->
+  <rect x="0" y="62" width="160" height="30" fill="#eff6ff" stroke="#e2e8f0" stroke-width="1"/>
+  <rect x="160" y="62" width="100" height="30" fill="#fff" stroke="#e2e8f0" stroke-width="1"/>
+  <rect x="260" y="62" width="440" height="30" fill="#fff" stroke="#e2e8f0" stroke-width="1"/>
+  <text x="80" y="82" text-anchor="middle" font-size="9" font-weight="500" fill="#1e40af">sandbox_modules</text>
+  <text x="210" y="82" text-anchor="middle" font-size="9" fill="#475569">bag</text>
+  <text x="276" y="82" text-anchor="start" font-size="9" fill="#475569">Module version tracking and metadata</text>
+
+  <!-- Row 3 -->
+  <rect x="0" y="92" width="160" height="30" fill="#eff6ff" stroke="#e2e8f0" stroke-width="1"/>
+  <rect x="160" y="92" width="100" height="30" fill="#fff" stroke="#e2e8f0" stroke-width="1"/>
+  <rect x="260" y="92" width="440" height="30" fill="#fff" stroke="#e2e8f0" stroke-width="1"/>
+  <text x="80" y="112" text-anchor="middle" font-size="9" font-weight="500" fill="#1e40af">sandbox_resources</text>
+  <text x="210" y="112" text-anchor="middle" font-size="9" fill="#475569">set</text>
+  <text x="276" y="112" text-anchor="start" font-size="9" fill="#475569">Resource usage tracking</text>
+
+  <!-- Row 4 -->
+  <rect x="0" y="122" width="160" height="30" fill="#eff6ff" stroke="#e2e8f0" stroke-width="1"/>
+  <rect x="160" y="122" width="100" height="30" fill="#fff" stroke="#e2e8f0" stroke-width="1"/>
+  <rect x="260" y="122" width="440" height="30" fill="#fff" stroke="#e2e8f0" stroke-width="1"/>
+  <text x="80" y="142" text-anchor="middle" font-size="9" font-weight="500" fill="#1e40af">sandbox_security</text>
+  <text x="210" y="142" text-anchor="middle" font-size="9" fill="#475569">ordered_set</text>
+  <text x="276" y="142" text-anchor="start" font-size="9" fill="#475569">Security events and audit log</text>
+
+  <!-- Row 5 -->
+  <rect x="0" y="152" width="160" height="30" fill="#eff6ff" stroke="#e2e8f0" stroke-width="1"/>
+  <rect x="160" y="152" width="100" height="30" fill="#fff" stroke="#e2e8f0" stroke-width="1"/>
+  <rect x="260" y="152" width="440" height="30" fill="#fff" stroke="#e2e8f0" stroke-width="1"/>
+  <text x="80" y="172" text-anchor="middle" font-size="9" font-weight="500" fill="#1e40af">sandboxes</text>
+  <text x="210" y="172" text-anchor="middle" font-size="9" fill="#475569">set</text>
+  <text x="276" y="172" text-anchor="start" font-size="9" fill="#475569">Active sandbox information</text>
+
+  <!-- Row 6 -->
+  <rect x="0" y="182" width="160" height="30" fill="#eff6ff" stroke="#e2e8f0" stroke-width="1"/>
+  <rect x="160" y="182" width="100" height="30" fill="#fff" stroke="#e2e8f0" stroke-width="1"/>
+  <rect x="260" y="182" width="440" height="30" fill="#fff" stroke="#e2e8f0" stroke-width="1"/>
+  <text x="80" y="202" text-anchor="middle" font-size="9" font-weight="500" fill="#1e40af">sandbox_monitors</text>
+  <text x="210" y="202" text-anchor="middle" font-size="9" fill="#475569">set</text>
+  <text x="276" y="202" text-anchor="start" font-size="9" fill="#475569">Monitor reference to sandbox mappings</text>
+
+  <!-- Row 7 -->
+  <rect x="0" y="212" width="160" height="30" fill="#eff6ff" stroke="#e2e8f0" stroke-width="1"/>
+  <rect x="160" y="212" width="100" height="30" fill="#fff" stroke="#e2e8f0" stroke-width="1"/>
+  <rect x="260" y="212" width="440" height="30" fill="#fff" stroke="#e2e8f0" stroke-width="1"/>
+  <text x="80" y="232" text-anchor="middle" font-size="9" font-weight="500" fill="#1e40af">isolation_contexts</text>
+  <text x="210" y="232" text-anchor="middle" font-size="9" fill="#475569">set</text>
+  <text x="276" y="232" text-anchor="start" font-size="9" fill="#475569">Process isolation context data</text>
+
+  <!-- Row 8 -->
+  <rect x="0" y="242" width="160" height="30" fill="#eff6ff" stroke="#e2e8f0" stroke-width="1"/>
+  <rect x="160" y="242" width="100" height="30" fill="#fff" stroke="#e2e8f0" stroke-width="1"/>
+  <rect x="260" y="242" width="440" height="30" fill="#fff" stroke="#e2e8f0" stroke-width="1"/>
+  <text x="80" y="262" text-anchor="middle" font-size="9" font-weight="500" fill="#1e40af">module_versions</text>
+  <text x="210" y="262" text-anchor="middle" font-size="9" fill="#475569">bag</text>
+  <text x="276" y="262" text-anchor="start" font-size="9" fill="#475569">Module version history</text>
+</svg>
 
 ### Table Configuration
 
@@ -595,19 +855,52 @@ All tables are configured with:
 
 ### Application Supervisor Tree
 
-```
-                    Sandbox.Supervisor
-                    (strategy: :one_for_one)
-                            |
-        +-------------------+-------------------+
-        |         |         |         |         |
-        v         v         v         v         v
-    Manager   ModuleVer   Process  Resource  Security
-              Manager    Isolator  Monitor  Controller
-                            |         |         |
-                            v         v         v
-                        FileWatcher  StatePreservation
-```
+<svg viewBox="0 0 640 220" xmlns="http://www.w3.org/2000/svg" style="max-width: 640px; font-family: system-ui, -apple-system, sans-serif;">
+  <!-- Root supervisor -->
+  <rect x="220" y="16" width="200" height="40" rx="6" fill="#1e293b" stroke="#0f172a" stroke-width="1.5"/>
+  <text x="320" y="36" text-anchor="middle" font-size="11" font-weight="600" fill="#fff">Sandbox.Supervisor</text>
+  <text x="320" y="50" text-anchor="middle" font-size="9" fill="#94a3b8">(strategy: :one_for_one)</text>
+
+  <!-- Connecting line from supervisor -->
+  <line x1="320" y1="56" x2="320" y2="76" stroke="#64748b" stroke-width="1.5"/>
+
+  <!-- Horizontal connection line -->
+  <line x1="64" y1="76" x2="576" y2="76" stroke="#64748b" stroke-width="1.5"/>
+
+  <!-- Vertical lines to children -->
+  <line x1="64" y1="76" x2="64" y2="96" stroke="#64748b" stroke-width="1.5"/>
+  <line x1="168" y1="76" x2="168" y2="96" stroke="#64748b" stroke-width="1.5"/>
+  <line x1="280" y1="76" x2="280" y2="96" stroke="#64748b" stroke-width="1.5"/>
+  <line x1="392" y1="76" x2="392" y2="96" stroke="#64748b" stroke-width="1.5"/>
+  <line x1="512" y1="76" x2="512" y2="96" stroke="#64748b" stroke-width="1.5"/>
+
+  <!-- First row of children -->
+  <rect x="16" y="100" width="96" height="36" rx="4" fill="#eff6ff" stroke="#3b82f6" stroke-width="1.5"/>
+  <text x="64" y="122" text-anchor="middle" font-size="9" font-weight="500" fill="#1e40af">Manager</text>
+
+  <rect x="112" y="100" width="112" height="36" rx="4" fill="#eff6ff" stroke="#3b82f6" stroke-width="1.5"/>
+  <text x="168" y="122" text-anchor="middle" font-size="9" font-weight="500" fill="#1e40af">ModuleVerManager</text>
+
+  <rect x="232" y="100" width="96" height="36" rx="4" fill="#eff6ff" stroke="#3b82f6" stroke-width="1.5"/>
+  <text x="280" y="122" text-anchor="middle" font-size="9" font-weight="500" fill="#1e40af">ProcessIsolator</text>
+
+  <rect x="336" y="100" width="112" height="36" rx="4" fill="#eff6ff" stroke="#3b82f6" stroke-width="1.5"/>
+  <text x="392" y="122" text-anchor="middle" font-size="9" font-weight="500" fill="#1e40af">ResourceMonitor</text>
+
+  <rect x="456" y="100" width="112" height="36" rx="4" fill="#eff6ff" stroke="#3b82f6" stroke-width="1.5"/>
+  <text x="512" y="122" text-anchor="middle" font-size="9" font-weight="500" fill="#1e40af">SecurityController</text>
+
+  <!-- Vertical lines to second row -->
+  <line x1="280" y1="136" x2="280" y2="156" stroke="#94a3b8" stroke-width="1"/>
+  <line x1="392" y1="136" x2="392" y2="156" stroke="#94a3b8" stroke-width="1"/>
+
+  <!-- Second row of children -->
+  <rect x="232" y="160" width="96" height="36" rx="4" fill="#f0fdf4" stroke="#10b981" stroke-width="1"/>
+  <text x="280" y="182" text-anchor="middle" font-size="9" font-weight="500" fill="#047857">FileWatcher</text>
+
+  <rect x="336" y="160" width="112" height="36" rx="4" fill="#f0fdf4" stroke="#10b981" stroke-width="1"/>
+  <text x="392" y="182" text-anchor="middle" font-size="9" font-weight="500" fill="#047857">StatePreservation</text>
+</svg>
 
 ### Supervision Strategy Details
 

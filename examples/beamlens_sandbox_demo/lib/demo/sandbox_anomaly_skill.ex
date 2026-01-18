@@ -18,7 +18,7 @@ defmodule Demo.SandboxAnomalySkill do
     If processes > 10:
       1) take_snapshot()
       2) send_notification(type: "process_spike", severity: "warning",
-         summary: "process count elevated", snapshot_ids: ["<snapshot id>"])
+         summary: "process count elevated", snapshot_ids: ["latest"])
       3) set_state("warning", "process count above threshold")
       4) done()
 

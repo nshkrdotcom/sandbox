@@ -338,21 +338,55 @@ Sandbox is the **execution substrate**, not the **evolution brain**. External sy
 
 ### Pattern 1: External Evolution Engine
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                    EXTERNAL: Evolution Engine                    │
-│         (mutation operators, population, selection)              │
-├─────────────────────────────────────────────────────────────────┤
-│                    EXTERNAL: Fitness Evaluator                   │
-│         (test runners, benchmarks, monitoring)                   │
-╠═════════════════════════════════════════════════════════════════╡
-│                                                                  │
-│                     SANDBOX (This Package)                       │
-│                                                                  │
-│    Spawn → Load → Execute → Contain → Track → Cleanup            │
-│                                                                  │
-└─────────────────────────────────────────────────────────────────┘
-```
+<svg viewBox="0 0 640 240" xmlns="http://www.w3.org/2000/svg" style="max-width: 640px; font-family: system-ui, -apple-system, sans-serif;">
+  <!-- External: Evolution Engine -->
+  <rect x="0" y="0" width="640" height="56" rx="0" fill="#fef3c7" stroke="#f59e0b" stroke-width="2"/>
+  <text x="320" y="24" text-anchor="middle" font-size="12" font-weight="600" fill="#b45309">EXTERNAL: Evolution Engine</text>
+  <text x="320" y="44" text-anchor="middle" font-size="10" fill="#92400e">(mutation operators, population, selection)</text>
+
+  <!-- External: Fitness Evaluator -->
+  <rect x="0" y="56" width="640" height="56" rx="0" fill="#fef3c7" stroke="#f59e0b" stroke-width="2"/>
+  <text x="320" y="80" text-anchor="middle" font-size="12" font-weight="600" fill="#b45309">EXTERNAL: Fitness Evaluator</text>
+  <text x="320" y="100" text-anchor="middle" font-size="10" fill="#92400e">(test runners, benchmarks, monitoring)</text>
+
+  <!-- Separator -->
+  <rect x="0" y="112" width="640" height="8" fill="#1e293b"/>
+
+  <!-- Sandbox section -->
+  <rect x="0" y="120" width="640" height="120" rx="0" fill="#eff6ff" stroke="#3b82f6" stroke-width="2"/>
+  <text x="320" y="152" text-anchor="middle" font-size="14" font-weight="700" fill="#1e40af">SANDBOX (This Package)</text>
+
+  <!-- Pipeline flow -->
+  <g transform="translate(56, 180)">
+    <rect x="0" y="0" width="72" height="28" rx="4" fill="#fff" stroke="#3b82f6" stroke-width="1"/>
+    <text x="36" y="18" text-anchor="middle" font-size="10" font-weight="500" fill="#1e40af">Spawn</text>
+
+    <text x="84" y="18" text-anchor="middle" font-size="14" fill="#64748b">→</text>
+
+    <rect x="96" y="0" width="72" height="28" rx="4" fill="#fff" stroke="#3b82f6" stroke-width="1"/>
+    <text x="132" y="18" text-anchor="middle" font-size="10" font-weight="500" fill="#1e40af">Load</text>
+
+    <text x="180" y="18" text-anchor="middle" font-size="14" fill="#64748b">→</text>
+
+    <rect x="192" y="0" width="72" height="28" rx="4" fill="#fff" stroke="#3b82f6" stroke-width="1"/>
+    <text x="228" y="18" text-anchor="middle" font-size="10" font-weight="500" fill="#1e40af">Execute</text>
+
+    <text x="276" y="18" text-anchor="middle" font-size="14" fill="#64748b">→</text>
+
+    <rect x="288" y="0" width="72" height="28" rx="4" fill="#fff" stroke="#3b82f6" stroke-width="1"/>
+    <text x="324" y="18" text-anchor="middle" font-size="10" font-weight="500" fill="#1e40af">Contain</text>
+
+    <text x="372" y="18" text-anchor="middle" font-size="14" fill="#64748b">→</text>
+
+    <rect x="384" y="0" width="72" height="28" rx="4" fill="#fff" stroke="#3b82f6" stroke-width="1"/>
+    <text x="420" y="18" text-anchor="middle" font-size="10" font-weight="500" fill="#1e40af">Track</text>
+
+    <text x="468" y="18" text-anchor="middle" font-size="14" fill="#64748b">→</text>
+
+    <rect x="480" y="0" width="72" height="28" rx="4" fill="#fff" stroke="#3b82f6" stroke-width="1"/>
+    <text x="516" y="18" text-anchor="middle" font-size="10" font-weight="500" fill="#1e40af">Cleanup</text>
+  </g>
+</svg>
 
 The evolution engine calls Sandbox APIs:
 

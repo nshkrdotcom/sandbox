@@ -1,6 +1,8 @@
 defmodule Demo.CLIAnomalyTest do
   use ExUnit.Case, async: false
 
+  alias Beamlens.Operator.Tools.{Done, SendNotification, SetState, TakeSnapshot}
+
   @cli_module Module.concat(Demo, CLI)
   @skill_module Module.concat(Demo, SandboxSkill)
   @store_module Module.concat(Demo.SandboxSkill, Store)
@@ -25,40 +27,49 @@ defmodule Demo.CLIAnomalyTest do
   end
 
   test "run_anomaly uses live snapshot and accepts matching operator output" do
-    operator_runner = fn skill, _opts ->
-      snapshot = skill.snapshot()
-
-      assert is_binary(snapshot[:sandbox_id])
-      assert is_integer(snapshot[:processes])
-      assert snapshot[:processes] > 10
-
-      {:ok, %{state: :warning, summary: "process count elevated", notifications: 1}}
-    end
+    puck_client =
+      Beamlens.Testing.mock_client([
+        %TakeSnapshot{intent: "take_snapshot"},
+        %SendNotification{
+          intent: "send_notification",
+          type: "process_spike",
+          summary: "process count elevated",
+          severity: :warning,
+          snapshot_ids: ["latest"]
+        },
+        %SetState{
+          intent: "set_state",
+          state: :warning,
+          reason: "process count above threshold"
+        },
+        %Done{intent: "done"}
+      ])
 
     assert {:ok, %{operator: %{state: :warning, notifications: 1}}} =
              apply(@cli_module, :run_anomaly, [
                [
-                 operator_runner: operator_runner,
-                 client_registry: %{},
+                 puck_client: puck_client,
                  process_load: 25
                ]
              ])
   end
 
   test "run_anomaly fails when operator output contradicts process spike" do
-    operator_runner = fn skill, _opts ->
-      snapshot = skill.snapshot()
-      assert is_integer(snapshot[:processes])
-      assert snapshot[:processes] > 10
-
-      {:ok, %{state: :healthy, summary: "sandbox stable", notifications: 0}}
-    end
+    puck_client =
+      Beamlens.Testing.mock_client([
+        %TakeSnapshot{intent: "take_snapshot"},
+        %SetState{
+          intent: "set_state",
+          state: :healthy,
+          reason: "process count normal"
+        },
+        %Done{intent: "done"}
+      ])
 
     assert {:error, {:anomaly_state_mismatch, _processes, 10, _state}} =
              apply(@cli_module, :run_anomaly, [
                [
-                 operator_runner: operator_runner,
-                 client_registry: %{},
+                 puck_client: puck_client,
                  process_load: 25
                ]
              ])

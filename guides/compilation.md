@@ -28,24 +28,48 @@ The compilation system consists of two primary modules:
 
 ### Architecture Overview
 
-```
-+---------------------------+
-|    Sandbox.compile_*      |
-+---------------------------+
-            |
-            v
-+---------------------------+
-|   IsolatedCompiler        |
-|   - Resource monitoring   |
-|   - Security scanning     |
-|   - Cache management      |
-+---------------------------+
-            |
-    +-------+-------+
-    |       |       |
-    v       v       v
-  :mix  :elixirc  :in_process
-```
+<svg viewBox="0 0 480 300" xmlns="http://www.w3.org/2000/svg" style="max-width: 480px; font-family: system-ui, -apple-system, sans-serif;">
+  <defs>
+    <marker id="comp-arrow" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#64748b"/>
+    </marker>
+  </defs>
+
+  <!-- Sandbox.compile_* -->
+  <rect x="140" y="16" width="200" height="44" rx="6" fill="#eff6ff" stroke="#3b82f6" stroke-width="1.5"/>
+  <text x="240" y="44" text-anchor="middle" font-size="12" font-weight="600" fill="#1e40af">Sandbox.compile_*</text>
+
+  <!-- Arrow down -->
+  <line x1="240" y1="60" x2="240" y2="88" stroke="#64748b" stroke-width="1.5" marker-end="url(#comp-arrow)"/>
+
+  <!-- IsolatedCompiler -->
+  <rect x="100" y="96" width="280" height="88" rx="6" fill="#f8fafc" stroke="#e2e8f0" stroke-width="1.5"/>
+  <text x="240" y="120" text-anchor="middle" font-size="12" font-weight="600" fill="#334155">IsolatedCompiler</text>
+  <line x1="120" y1="132" x2="360" y2="132" stroke="#e2e8f0" stroke-width="1"/>
+  <text x="240" y="150" text-anchor="middle" font-size="10" fill="#64748b">• Resource monitoring</text>
+  <text x="240" y="166" text-anchor="middle" font-size="10" fill="#64748b">• Security scanning  •  Cache management</text>
+
+  <!-- Arrow down splitting -->
+  <line x1="240" y1="184" x2="240" y2="208" stroke="#64748b" stroke-width="1.5"/>
+
+  <!-- Horizontal connector -->
+  <line x1="100" y1="208" x2="380" y2="208" stroke="#64748b" stroke-width="1.5"/>
+
+  <!-- Vertical connectors to backends -->
+  <line x1="100" y1="208" x2="100" y2="228" stroke="#64748b" stroke-width="1.5" marker-end="url(#comp-arrow)"/>
+  <line x1="240" y1="208" x2="240" y2="228" stroke="#64748b" stroke-width="1.5" marker-end="url(#comp-arrow)"/>
+  <line x1="380" y1="208" x2="380" y2="228" stroke="#64748b" stroke-width="1.5" marker-end="url(#comp-arrow)"/>
+
+  <!-- Backend boxes -->
+  <rect x="48" y="236" width="104" height="44" rx="6" fill="#f0fdf4" stroke="#10b981" stroke-width="1.5"/>
+  <text x="100" y="264" text-anchor="middle" font-size="11" font-weight="500" fill="#047857">:mix</text>
+
+  <rect x="188" y="236" width="104" height="44" rx="6" fill="#fef3c7" stroke="#f59e0b" stroke-width="1.5"/>
+  <text x="240" y="264" text-anchor="middle" font-size="11" font-weight="500" fill="#b45309">:elixirc</text>
+
+  <rect x="328" y="236" width="104" height="44" rx="6" fill="#fce7f3" stroke="#ec4899" stroke-width="1.5"/>
+  <text x="380" y="264" text-anchor="middle" font-size="11" font-weight="500" fill="#be185d">:in_process</text>
+</svg>
 
 ---
 
