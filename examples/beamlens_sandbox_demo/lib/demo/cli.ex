@@ -318,7 +318,7 @@ defmodule Demo.CLI do
   end
 
   defp operator_max_iterations_for(opts, _mode) do
-    Keyword.get(opts, :operator_max_iterations, 2)
+    Keyword.get(opts, :operator_max_iterations, 4)
   end
 
   defp resolve_client_registry(opts) do

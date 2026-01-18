@@ -286,7 +286,7 @@ end
 
 1. **Beamlens as Child**: We start Beamlens as a supervised child. This ensures Beamlens restarts if it crashes.
 
-2. **`operators: [Demo.SandboxSkill, Demo.SandboxAnomalySkill]`**: This tells Beamlens to register both skills. The plumbing demo uses `Demo.SandboxSkill`; the anomaly demo uses the stricter `Demo.SandboxAnomalySkill`.
+2. **`operators: [Demo.SandboxSkill, Demo.SandboxAnomalySkill]`**: This tells Beamlens to register both skills. The plumbing demo uses `Demo.SandboxSkill`; the anomaly demo uses `Demo.SandboxAnomalySkill` tuned for spike detection and notifications.
 
 3. **No Sandbox Here**: Notice we don't start the Sandbox here. Sandboxes are created on-demand by `Demo.CLI`. This is intentional - sandboxes are ephemeral, while Beamlens is long-lived.
 
@@ -390,7 +390,19 @@ defmodule Demo.SandboxSkill do
   def system_prompt do
     """
     You monitor a sandbox instance. Use the callbacks to read info and usage.
-    Keep the summary short and call done() within 1-2 iterations.
+    Do not use think. Use snapshot data from take_snapshot() as the source of truth.
+
+    If processes > 10:
+      1) take_snapshot()
+      2) send_notification(type: "process_spike", severity: "warning",
+         summary: "process count elevated", snapshot_ids: ["<snapshot id>"])
+      3) set_state("warning", "process count above threshold")
+      4) done()
+
+    If processes <= 10:
+      take_snapshot() then set_state("healthy", "process count normal") then done().
+
+    Keep responses short and complete within 4 iterations.
     """
   end
 
@@ -438,10 +450,9 @@ The tradeoff is that this is global state - only one sandbox can be monitored at
 ### Demo.SandboxAnomalySkill
 
 `Demo.SandboxAnomalySkill` reuses the same callbacks and snapshot format as
-`Demo.SandboxSkill`, but it provides a stricter system prompt that enforces:
-`take_snapshot → send_notification → set_state → done` when a process spike is
-detected. This keeps the anomaly demo deterministic and avoids the "think"
-responses that can short-circuit the flow.
+`Demo.SandboxSkill`, but it is tuned for spike detection and requires a
+notification when a process spike is observed. This keeps the anomaly demo
+deterministic and ensures the output reflects the injected load.
 
 ### DemoSandbox.Worker (sandbox_app/)
 
@@ -586,8 +597,7 @@ This proves the hot-reload worked.
 ### Step 3b: Inject Process Load (Anomaly Demo Only)
 
 `Demo.CLI.run_anomaly/1` adds a process spike before the operator runs and
-uses `Demo.SandboxAnomalySkill` (a stricter prompt) to force a warning +
-notification flow:
+uses `Demo.SandboxAnomalySkill` to force a warning + notification flow:
 
 ```elixir
 SandboxRunner.induce_process_load("demo-1", 25)

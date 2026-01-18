@@ -19,7 +19,8 @@ defmodule Sandbox.MixProject do
       elixirc_paths: elixirc_paths(Mix.env()),
       # Suppress module redefinition warnings during tests (expected behavior for sandbox isolation)
       elixirc_options: elixirc_options(Mix.env()),
-      aliases: aliases()
+      aliases: aliases(),
+      dialyzer: dialyzer()
     ]
   end
 
