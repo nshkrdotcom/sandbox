@@ -37,7 +37,7 @@ defmodule Demo.SandboxRunnerTest do
   test "sandbox_skill snapshot reports sandbox id", %{sandbox_path: sandbox_path} do
     {sandbox_id, result} =
       with_sandbox(sandbox_path, fn sandbox_id ->
-        SandboxSkill.configure(sandbox_id)
+        SandboxSkill.Store.set_sandbox_id(sandbox_id)
         SandboxSkill.snapshot()
       end)
 
@@ -52,7 +52,7 @@ defmodule Demo.SandboxRunnerTest do
       {sandbox_id, fun.(sandbox_id)}
     after
       SandboxRunner.destroy_sandbox(sandbox_id)
-      SandboxSkill.clear()
+      SandboxSkill.Store.clear()
     end
   end
 

@@ -5,6 +5,7 @@ defmodule Demo.Application do
 
   def start(_type, _args) do
     children = [
+      Demo.SandboxSkill.Store,
       {Beamlens, operators: [Demo.SandboxSkill, Demo.SandboxAnomalySkill]}
     ]
 

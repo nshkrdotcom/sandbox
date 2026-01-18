@@ -218,4 +218,10 @@ defmodule Sandbox.MixProject do
       "test.examples": ["cmd --cd examples/beamlens_sandbox_demo mix test"]
     ]
   end
+
+  def dialyzer do
+    [
+      plt_add_apps: [:ex_unit]
+    ]
+  end
 end

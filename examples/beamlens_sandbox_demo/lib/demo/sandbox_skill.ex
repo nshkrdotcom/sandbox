@@ -3,18 +3,6 @@ defmodule Demo.SandboxSkill do
 
   @behaviour Beamlens.Skill
 
-  @sandbox_key {__MODULE__, :sandbox_id}
-
-  def configure(sandbox_id) when is_binary(sandbox_id) do
-    :persistent_term.put(@sandbox_key, sandbox_id)
-    :ok
-  end
-
-  def clear do
-    :persistent_term.erase(@sandbox_key)
-    :ok
-  end
-
   def title, do: "Sandbox"
 
   def description, do: "Sandbox: status and resource usage"
@@ -27,10 +15,7 @@ defmodule Demo.SandboxSkill do
   end
 
   def snapshot do
-    case sandbox_id() do
-      nil -> %{error: "sandbox_id_not_configured"}
-      sandbox_id -> snapshot_for(sandbox_id)
-    end
+    with_sandbox_id(&snapshot_for/1)
   end
 
   def callbacks do
@@ -50,13 +35,6 @@ defmodule Demo.SandboxSkill do
     """
   end
 
-  defp sandbox_id do
-    case :persistent_term.get(@sandbox_key, nil) do
-      value when is_binary(value) -> value
-      _ -> nil
-    end
-  end
-
   defp snapshot_for(sandbox_id) do
     case sandbox_resource_usage_for(sandbox_id) do
       %{error: _} = error -> error
@@ -65,16 +43,23 @@ defmodule Demo.SandboxSkill do
   end
 
   defp sandbox_info do
-    case sandbox_id() do
-      nil -> %{error: "sandbox_id_not_configured"}
-      sandbox_id -> sandbox_info_for(sandbox_id)
-    end
+    with_sandbox_id(&sandbox_info_for/1)
   end
 
   defp sandbox_resource_usage do
-    case sandbox_id() do
-      nil -> %{error: "sandbox_id_not_configured"}
-      sandbox_id -> sandbox_resource_usage_for(sandbox_id)
+    with_sandbox_id(&sandbox_resource_usage_for/1)
+  end
+
+  defp with_sandbox_id(fun) do
+    case Demo.SandboxSkill.Store.get_sandbox_id() do
+      {:ok, sandbox_id} when is_binary(sandbox_id) ->
+        fun.(sandbox_id)
+
+      {:ok, nil} ->
+        %{error: "sandbox_id_not_configured"}
+
+      {:error, reason} ->
+        %{error: format_reason(reason)}
     end
   end
 

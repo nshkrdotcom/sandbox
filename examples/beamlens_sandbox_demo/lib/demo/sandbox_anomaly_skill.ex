@@ -3,14 +3,6 @@ defmodule Demo.SandboxAnomalySkill do
 
   @behaviour Beamlens.Skill
 
-  def configure(sandbox_id) when is_binary(sandbox_id) do
-    Demo.SandboxSkill.configure(sandbox_id)
-  end
-
-  def clear do
-    Demo.SandboxSkill.clear()
-  end
-
   def title, do: "Sandbox Anomaly"
 
   def description, do: "Sandbox: detect process spikes and notify"

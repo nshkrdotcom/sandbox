@@ -56,7 +56,7 @@ defmodule Demo.CLI do
          {:ok, run_result} <- SandboxRunner.run_in_sandbox(sandbox_id),
          :ok <- log_demo("run result: #{run_result}"),
          {:ok, anomaly_context} <- maybe_induce_anomaly(mode, sandbox_id, opts),
-         :ok <- configure_skill(skill, sandbox_id, mode),
+         :ok <- set_sandbox_target(sandbox_id),
          :ok <- validate_skill_snapshot(skill),
          {:ok, operator_summary} <-
            run_operator_and_log(
@@ -149,25 +149,11 @@ defmodule Demo.CLI do
     Keyword.get(opts, :operator_skill, SandboxSkill)
   end
 
-  defp configure_skill(skill, sandbox_id, mode) do
-    case Code.ensure_loaded(skill) do
-      {:module, _} ->
-        if function_exported?(skill, :configure, 1) do
-          case skill.configure(sandbox_id) do
-            :ok -> :ok
-            {:error, _} = error -> error
-            other -> {:error, {:skill_configure_failed, other}}
-          end
-        else
-          if mode == :anomaly do
-            {:error, {:skill_not_configurable, skill}}
-          else
-            :ok
-          end
-        end
-
-      {:error, reason} ->
-        {:error, {:skill_not_loaded, {skill, reason}}}
+  defp set_sandbox_target(sandbox_id) do
+    case Demo.SandboxSkill.Store.set_sandbox_id(sandbox_id) do
+      :ok -> :ok
+      {:error, _} = error -> error
+      other -> {:error, {:skill_store_failed, other}}
     end
   end
 

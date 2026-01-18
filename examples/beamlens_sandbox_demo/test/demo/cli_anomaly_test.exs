@@ -3,9 +3,11 @@ defmodule Demo.CLIAnomalyTest do
 
   @cli_module Module.concat(Demo, CLI)
   @skill_module Module.concat(Demo, SandboxSkill)
+  @store_module Module.concat(Demo.SandboxSkill, Store)
 
   setup do
-    if Code.ensure_loaded?(@cli_module) and Code.ensure_loaded?(@skill_module) do
+    if Code.ensure_loaded?(@cli_module) and Code.ensure_loaded?(@skill_module) and
+         Code.ensure_loaded?(@store_module) do
       Application.ensure_all_started(:beamlens_sandbox_demo)
       :ok
     else
@@ -16,7 +18,7 @@ defmodule Demo.CLIAnomalyTest do
 
   setup do
     on_exit(fn ->
-      apply(@skill_module, :clear, [])
+      apply(@store_module, :clear, [])
     end)
 
     :ok

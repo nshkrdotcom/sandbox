@@ -174,7 +174,7 @@ The `test/` directory shows how to test systems with multiple async components (
 
   <!-- Step 8: Config skill -->
   <rect x="195" y="295" width="120" height="50" rx="5" fill="#eff6ff" stroke="#3b82f6" stroke-width="1.5"/>
-  <text x="255" y="317" text-anchor="middle" font-size="10" font-weight="600" fill="#1e40af">8. config skill</text>
+  <text x="255" y="317" text-anchor="middle" font-size="10" font-weight="600" fill="#1e40af">8. store sandbox id</text>
   <text x="255" y="333" text-anchor="middle" font-size="9" fill="#64748b">set sandbox_id</text>
 
   <!-- Step 9: Start operator -->
@@ -222,6 +222,8 @@ beamlens_sandbox_demo/
 │       ├── cli.ex              # Command-line interface
 │       ├── sandbox_runner.ex   # Sandbox lifecycle helpers
 │       ├── sandbox_skill.ex    # Beamlens skill for monitoring
+│       ├── sandbox_skill/      # Skill state store (GenServer)
+│       │   └── store.ex
 │       └── sandbox_anomaly_skill.ex # Beamlens skill for anomaly demo
 │
 ├── sandbox_app/                # Code that runs INSIDE the sandbox
@@ -381,14 +383,6 @@ This is where Sandbox meets Beamlens. A "Skill" is Beamlens's abstraction for a 
 defmodule Demo.SandboxSkill do
   @behaviour Beamlens.Skill
 
-  @sandbox_key {__MODULE__, :sandbox_id}
-
-  # Configuration
-  def configure(sandbox_id) when is_binary(sandbox_id) do
-    :persistent_term.put(@sandbox_key, sandbox_id)
-    :ok
-  end
-
   # Beamlens Skill Callbacks
   def title, do: "Sandbox"
   def description, do: "Sandbox: status and resource usage"
@@ -401,9 +395,10 @@ defmodule Demo.SandboxSkill do
   end
 
   def snapshot do
-    case sandbox_id() do
-      nil -> %{error: "sandbox_id_not_configured"}
-      sandbox_id -> snapshot_for(sandbox_id)
+    case Demo.SandboxSkill.Store.get_sandbox_id() do
+      {:ok, sandbox_id} when is_binary(sandbox_id) -> snapshot_for(sandbox_id)
+      {:ok, nil} -> %{error: "sandbox_id_not_configured"}
+      {:error, reason} -> %{error: inspect(reason)}
     end
   end
 
@@ -430,19 +425,13 @@ end
 
 5. **`callback_docs/0`**: Documentation for the callbacks, provided to the LLM so it knows what each callback does.
 
-**Why `persistent_term` for Configuration?**
+**Why a Store Process?**
 
-```elixir
-def configure(sandbox_id) when is_binary(sandbox_id) do
-  :persistent_term.put(@sandbox_key, sandbox_id)
-  :ok
-end
-```
+The demo keeps the current sandbox id in a small GenServer store:
 
-`persistent_term` is used because:
-1. Skills are stateless modules - they can't hold their own state
-2. The sandbox_id needs to be accessible from any process
-3. `persistent_term` is read-optimized and safe for concurrent access
+- Skills are stateless modules - they can't hold their own state
+- The sandbox id needs to be accessible from any process
+- A supervised store is explicit and restartable
 
 The tradeoff is that this is global state - only one sandbox can be monitored at a time. In production, you'd want per-operator configuration.
 
@@ -517,7 +506,7 @@ defmodule Demo.CLI do
          {:ok, run_result} <- SandboxRunner.run_in_sandbox(sandbox_id),
          :ok <- log_demo("run result: #{run_result}"),
          {:ok, anomaly_context} <- maybe_induce_anomaly(mode, sandbox_id, opts),
-         :ok <- configure_skill(skill, sandbox_id, mode),
+         :ok <- set_sandbox_target(sandbox_id),
          :ok <- validate_skill_snapshot(skill),
          {:ok, operator_summary} <-
            run_operator_and_log(
@@ -615,13 +604,13 @@ The anomaly demo also allows more iterations (`operator_max_iterations`
 defaults to 5) to complete `take_snapshot` → `send_notification` → `set_state`
 → `done`.
 
-### Step 4: Configure Skill and Validate Snapshot
+### Step 4: Set Sandbox Target and Validate Snapshot
 
 ```elixir
-SandboxSkill.configure("demo-1")
+Demo.SandboxSkill.Store.set_sandbox_id("demo-1")
 ```
 
-1. Stores the sandbox_id in `persistent_term`
+1. Stores the sandbox_id in a small GenServer store
 2. Now `SandboxSkill.snapshot/0` will return data for "demo-1"
 3. The CLI calls `snapshot/0` immediately to ensure live data is available
 
@@ -759,7 +748,8 @@ least one notification when the process count spikes.
 The anomaly demo fails fast when the operator output does not match live
 telemetry. Typical failure reasons:
 
-- `{:skill_snapshot_failed, "sandbox_id_not_configured"}`: the skill was not configured.
+- `{:skill_snapshot_failed, "sandbox_id_not_configured"}`: the skill store has no sandbox id yet.
+- `{:skill_snapshot_failed, "store_not_running"}`: the skill store GenServer is not running.
 - `{:anomaly_state_mismatch, processes, 10, state}`: operator state disagreed with live process count.
 - `{:anomaly_notification_missing, processes, 10}`: process spike occurred but no notification was emitted.
 - `{:anomaly_unexpected_notification, processes, 10}`: operator emitted a notification when no spike existed.
@@ -768,7 +758,8 @@ These failures are intentional guardrails to keep the demo honest.
 
 ### Troubleshooting
 
-- `{:skill_snapshot_failed, "sandbox_id_not_configured"}` → run from `examples/beamlens_sandbox_demo` and avoid a custom `operator_skill` that lacks `configure/1`.
+- `{:skill_snapshot_failed, "sandbox_id_not_configured"}` → call `Demo.SandboxSkill.Store.set_sandbox_id/1` before running the operator.
+- `{:skill_snapshot_failed, "store_not_running"}` → ensure `Demo.SandboxSkill.Store` is started (it should be under `Demo.Application`).
 - `{:anomaly_state_mismatch, ...}` / `{:anomaly_notification_missing, ...}` → rerun with a stronger model via `BEAMLENS_DEMO_MODEL` or raise `operator_max_iterations`.
 - `{:anomaly_unexpected_notification, ...}` → ensure the spike is real by using `process_load` > 10 (default is 25).
 - Provider/auth errors → confirm `BEAMLENS_DEMO_PROVIDER` matches the API key env var (`GOOGLE_API_KEY`, `ANTHROPIC_API_KEY`, etc).
@@ -906,7 +897,7 @@ defmodule Demo.SandboxRunnerTest do
       {sandbox_id, fun.(sandbox_id)}
     after
       SandboxRunner.destroy_sandbox(sandbox_id)
-      SandboxSkill.clear()
+      SandboxSkill.Store.clear()
     end
   end
 end
@@ -932,44 +923,52 @@ def callbacks do
 end
 
 defp get_module_versions do
-  case sandbox_id() do
-    nil -> %{error: "not configured"}
-    id ->
+  case Demo.SandboxSkill.Store.get_sandbox_id() do
+    {:ok, id} when is_binary(id) ->
       case Sandbox.Manager.get_sandbox_info(id) do
         {:ok, info} ->
           %{modules: info.loaded_modules, versions: info.module_versions}
         _ ->
           %{error: "sandbox not found"}
       end
+
+    {:ok, nil} ->
+      %{error: "sandbox_id_not_configured"}
+
+    {:error, reason} ->
+      %{error: inspect(reason)}
   end
 end
 ```
 
 ### Monitoring Multiple Sandboxes
 
-The current implementation monitors one sandbox at a time. For multiple sandboxes:
+The current implementation monitors one sandbox at a time. For multiple sandboxes,
+use a store that tracks a list of sandbox ids and have the skill read from it:
 
 ```elixir
 defmodule Demo.MultiSandboxSkill do
   @behaviour Beamlens.Skill
 
-  # Store multiple sandbox IDs
-  def configure(sandbox_ids) when is_list(sandbox_ids) do
-    :persistent_term.put({__MODULE__, :sandbox_ids}, sandbox_ids)
-    :ok
-  end
-
   def snapshot do
-    sandbox_ids()
-    |> Enum.map(fn id ->
-      case Sandbox.resource_usage(id) do
-        {:ok, usage} -> %{id: id, status: :ok, usage: usage}
-        {:error, reason} -> %{id: id, status: :error, reason: reason}
-      end
-    end)
+    case Demo.MultiSandboxStore.get_sandbox_ids() do
+      {:ok, sandbox_ids} ->
+        Enum.map(sandbox_ids, fn id ->
+          case Sandbox.resource_usage(id) do
+            {:ok, usage} -> %{id: id, status: :ok, usage: usage}
+            {:error, reason} -> %{id: id, status: :error, reason: inspect(reason)}
+          end
+        end)
+
+      {:error, reason} ->
+        [%{status: :error, reason: inspect(reason)}]
+    end
   end
 end
 ```
+
+Set sandbox ids with `Demo.MultiSandboxStore.set_sandbox_ids/1` from your CLI
+or supervisor before starting the operator.
 
 ### Adding Health Checks
 
@@ -982,9 +981,8 @@ def callbacks do
 end
 
 defp perform_health_check do
-  case sandbox_id() do
-    nil -> %{healthy: false, reason: "not configured"}
-    id ->
+  case Demo.SandboxSkill.Store.get_sandbox_id() do
+    {:ok, id} when is_binary(id) ->
       checks = [
         {:sandbox_exists, sandbox_exists?(id)},
         {:processes_healthy, processes_healthy?(id)},
@@ -998,6 +996,12 @@ defp perform_health_check do
         checks: Map.new(checks),
         failed: Enum.map(failed, &elem(&1, 0))
       }
+
+    {:ok, nil} ->
+      %{healthy: false, reason: "sandbox_id_not_configured"}
+
+    {:error, reason} ->
+      %{healthy: false, reason: inspect(reason)}
   end
 end
 ```
@@ -1023,15 +1027,15 @@ Beamlens provides AI-powered operators that can:
 
 For sandbox monitoring, this means you get intelligent health reports, not just raw metrics.
 
-### Why `persistent_term` for Skill Configuration?
+### Why a GenServer Store for Sandbox Selection?
 
 Options considered:
-1. **GenServer state**: Requires message passing, adds latency
-2. **ETS**: Works, but `persistent_term` is faster for read-heavy workloads
-3. **Process dictionary**: Per-process, not shared across operators
-4. **`persistent_term`**: Global, read-optimized, perfect for configuration
+1. **Pass sandbox id in context**: clean, but Beamlens snapshots/callbacks are 0-arity, so you still need shared lookup.
+2. **ETS/persistent_term**: fast, but implicit global state and harder to restart cleanly.
+3. **GenServer store**: explicit, supervised, restartable, and aligned with the Beamlens store pattern.
 
-The downside is global state, which we accept for this demo. Production code might use per-operator configuration.
+The downside is still global state, so this demo only monitors one sandbox at a time. Production code should
+use per-operator configuration or a per-operator store process.
 
 ### Why Does `run_in_sandbox` Return `{:ok, 42}` Not Just `42`?
 
