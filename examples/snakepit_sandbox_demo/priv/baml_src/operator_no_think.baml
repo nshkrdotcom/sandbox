@@ -40,11 +40,6 @@ class GetSnapshots {
   offset int? @description("Number of snapshots to skip")
 }
 
-class Execute {
-  intent "execute"
-  code string @description("Lua code to execute. Available functions are documented in the system prompt.")
-}
-
 class Wait {
   intent "wait"
   ms int @description("Milliseconds to sleep before next iteration")
@@ -95,11 +90,6 @@ captured snapshot.
 Retrieve multiple snapshots with optional pagination.
 - limit: Maximum number to return
 - offset: Number to skip from the beginning
-
-### execute(code)
-Run Lua code to gather detailed metrics. Available functions:
-
-{{ callback_docs }}
 "#
 
 template_string OperatorMessages(messages: Message[]) #"
@@ -117,7 +107,7 @@ function OperatorRunNoThink(
   messages: Message[],
   system_prompt: string,
   callback_docs: string
-) -> SetState | SendNotification | GetNotifications | TakeSnapshot | GetSnapshot | GetSnapshots | Execute | Wait | Done {
+) -> SetState | SendNotification | GetNotifications | TakeSnapshot | GetSnapshot | GetSnapshots | Wait | Done {
   client Default
   prompt #"
 {{ _.role("system") }}
@@ -146,7 +136,7 @@ Signal that you have completed your analysis. Use this when:
 
 Your workflow:
 1. Start by calling take_snapshot() to capture current system metrics
-2. Investigate using execute() and additional snapshots as needed
+2. Review snapshots via get_snapshot/get_snapshots if needed
 3. Send notifications for any issues found (include snapshot_ids)
 4. Set appropriate state based on your findings
 5. Call done() when your analysis is complete
