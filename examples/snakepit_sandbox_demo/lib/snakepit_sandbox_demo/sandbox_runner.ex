@@ -153,7 +153,14 @@ defmodule SnakepitSandboxDemo.SandboxRunner do
   end
 
   defp start_snakepit_app(app_module) do
-    apply(app_module, :start, [:normal, []])
+    case apply(app_module, :start, [:normal, []]) do
+      {:ok, pid} = ok ->
+        Process.unlink(pid)
+        ok
+
+      other ->
+        other
+    end
   end
 
   defp unwrap_start_result({:ok, pid}) when is_pid(pid), do: {:ok, pid}

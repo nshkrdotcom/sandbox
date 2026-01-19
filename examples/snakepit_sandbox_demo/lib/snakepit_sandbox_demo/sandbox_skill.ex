@@ -126,7 +126,7 @@ defmodule SnakepitSandboxDemo.SandboxSkill do
              sandbox_id,
              Snakepit.Bridge.SessionStore
            ),
-         {:ok, pid} <- Sandbox.run(sandbox_id, fn -> Process.whereis(session_store) end),
+         {:ok, pid} <- ensure_session_store_pid(sandbox_id, session_store),
          true <- is_pid(pid),
          {:ok, stats} <- Sandbox.run(sandbox_id, fn -> apply(session_store, :get_stats, []) end) do
       %{
@@ -137,6 +137,36 @@ defmodule SnakepitSandboxDemo.SandboxSkill do
       {:ok, nil} -> snakepit_stats_error("session_store_not_running")
       false -> snakepit_stats_error("session_store_not_running")
       {:error, reason} -> snakepit_stats_error(format_reason(reason))
+    end
+  end
+
+  defp ensure_session_store_pid(sandbox_id, session_store) do
+    case Sandbox.run(sandbox_id, fn -> ensure_session_store_started(session_store) end) do
+      {:ok, pid} when is_pid(pid) ->
+        {:ok, pid}
+
+      {:ok, {:error, reason}} ->
+        {:error, reason}
+
+      {:ok, other} ->
+        {:error, {:session_store_unavailable, other}}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp ensure_session_store_started(session_store) do
+    case Process.whereis(session_store) do
+      pid when is_pid(pid) ->
+        pid
+
+      _ ->
+        case apply(session_store, :start_link, [[name: session_store]]) do
+          {:ok, pid} -> pid
+          {:error, {:already_started, pid}} -> pid
+          other -> {:error, other}
+        end
     end
   end
 
