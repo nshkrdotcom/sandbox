@@ -21,8 +21,7 @@ defmodule SnakepitSandboxDemo.MixProject do
   defp deps do
     [
       {:sandbox, path: "../../"},
-      {:beamlens,
-       github: "nshkrdotcom/beamlens", ref: "3684b91f4ea4466f53ddf820aae8aebd5cb262f3"},
+      {:beamlens, github: "beamlens/beamlens"},
       {:snakepit,
        github: "nshkrdotcom/snakepit",
        ref: "35da013bb2647e43c8232b94b42051aecd17302b",

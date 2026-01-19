@@ -19,8 +19,17 @@ defmodule SnakepitSandboxDemo.SandboxSkill do
 
     If snakepit.current_sessions > #{@session_warning_threshold}:
       1) take_snapshot()
-      2) send_notification(type: "session_spike", severity: "warning",
-         summary: "session count elevated", snapshot_ids: ["latest"])
+      2) If snakepit.pool.error is present:
+           send_notification(type: "session_spike", severity: "warning",
+             summary: "session count elevated; pool stats unavailable", snapshot_ids: ["latest"])
+         Else if snakepit.pool.queued > 0 or snakepit.pool.pool_saturated > 0
+           or snakepit.pool.busy >= snakepit.pool.workers:
+           send_notification(type: "session_spike", severity: "warning",
+             summary: "session count elevated; pool under pressure (queued=snakepit.pool.queued, busy=snakepit.pool.busy/snakepit.pool.workers)",
+             snapshot_ids: ["latest"])
+         Else:
+           send_notification(type: "session_spike", severity: "warning",
+             summary: "session count elevated", snapshot_ids: ["latest"])
       3) set_state("warning", "session count above threshold")
       4) done()
 
@@ -39,7 +48,8 @@ defmodule SnakepitSandboxDemo.SandboxSkill do
     %{
       "sandbox_info" => fn -> sandbox_info() end,
       "sandbox_resource_usage" => fn -> sandbox_resource_usage() end,
-      "snakepit_session_stats" => fn -> snakepit_session_stats() end
+      "snakepit_session_stats" => fn -> snakepit_session_stats() end,
+      "snakepit_pool_stats" => fn -> snakepit_pool_stats() end
     }
   end
 
@@ -54,20 +64,25 @@ defmodule SnakepitSandboxDemo.SandboxSkill do
     ### snakepit_session_stats()
     Returns Snakepit session stats: current_sessions, memory_usage_bytes.
     When stats are unavailable, current_sessions is nil and error is set.
+
+    ### snakepit_pool_stats()
+    Returns pool stats: workers, available, busy, queued, requests, errors,
+    queue_timeouts, pool_saturated. When stats are unavailable, error is set.
     """
   end
 
   defp snapshot_for(sandbox_id) do
     usage = sandbox_resource_usage_for(sandbox_id)
     stats = snakepit_session_stats_for(sandbox_id)
+    pool_stats = snakepit_pool_stats_for(sandbox_id)
 
     if error_map?(usage) and error_map?(stats) do
-      snapshot_error(usage, stats)
+      snapshot_error(usage, stats, pool_stats)
     else
       %{
         sandbox_id: sandbox_id,
         sandbox: usage,
-        snakepit: stats
+        snakepit: Map.put(stats, :pool, pool_stats)
       }
     end
   end
@@ -82,6 +97,10 @@ defmodule SnakepitSandboxDemo.SandboxSkill do
 
   defp snakepit_session_stats do
     with_sandbox_id(&snakepit_session_stats_for/1)
+  end
+
+  defp snakepit_pool_stats do
+    with_sandbox_id(&snakepit_pool_stats_for/1)
   end
 
   defp with_sandbox_id(fun) do
@@ -140,6 +159,32 @@ defmodule SnakepitSandboxDemo.SandboxSkill do
     end
   end
 
+  defp snakepit_pool_stats_for(sandbox_id) do
+    with {:ok, pool_module} <-
+           SnakepitSandboxDemo.SandboxModules.resolve_module(
+             sandbox_id,
+             Snakepit.Pool
+           ),
+         {:ok, pid} <- Sandbox.run(sandbox_id, fn -> Process.whereis(pool_module) end),
+         true <- is_pid(pid),
+         {:ok, stats} <- Sandbox.run(sandbox_id, fn -> apply(pool_module, :get_stats, []) end) do
+      %{
+        workers: Map.get(stats, :workers),
+        available: Map.get(stats, :available),
+        busy: Map.get(stats, :busy),
+        queued: Map.get(stats, :queued),
+        requests: Map.get(stats, :requests),
+        errors: Map.get(stats, :errors),
+        queue_timeouts: Map.get(stats, :queue_timeouts),
+        pool_saturated: Map.get(stats, :pool_saturated)
+      }
+    else
+      {:ok, nil} -> snakepit_pool_error("pool_not_running")
+      false -> snakepit_pool_error("pool_not_running")
+      {:error, reason} -> snakepit_pool_error(format_reason(reason))
+    end
+  end
+
   defp ensure_session_store_pid(sandbox_id, session_store) do
     case Sandbox.run(sandbox_id, fn -> ensure_session_store_started(session_store) end) do
       {:ok, pid} when is_pid(pid) ->
@@ -178,6 +223,20 @@ defmodule SnakepitSandboxDemo.SandboxSkill do
     }
   end
 
+  defp snakepit_pool_error(reason) do
+    %{
+      error: reason,
+      workers: nil,
+      available: nil,
+      busy: nil,
+      queued: nil,
+      requests: nil,
+      errors: nil,
+      queue_timeouts: nil,
+      pool_saturated: nil
+    }
+  end
+
   defp sanitize_usage(usage) do
     usage = if is_map(usage), do: usage, else: %{}
 
@@ -195,10 +254,12 @@ defmodule SnakepitSandboxDemo.SandboxSkill do
   defp error_map?(value) when is_map(value), do: Map.has_key?(value, :error)
   defp error_map?(_), do: true
 
-  defp snapshot_error(usage, stats) do
+  defp snapshot_error(usage, stats, pool_stats) do
+    pool_error = Map.get(pool_stats, :error)
+
     %{
       error:
-        "snapshot_unavailable sandbox=#{Map.get(usage, :error)} snakepit=#{Map.get(stats, :error)}"
+        "snapshot_unavailable sandbox=#{Map.get(usage, :error)} snakepit=#{Map.get(stats, :error)} pool=#{pool_error}"
     }
   end
 

@@ -16,7 +16,9 @@ defmodule SnakepitSandboxDemo.SandboxRunner do
         Sandbox.create_sandbox(sandbox_id, SnakepitSandboxDemo.SandboxSupervisor,
           sandbox_path: prepared_path,
           security_profile: :low,
-          resource_limits: %{max_cpu_percentage: 100.0}
+          resource_limits: %{max_cpu_percentage: 100.0},
+          source_exclude_dirs: ["_build", "deps", "test", "lib/mix"],
+          protocol_consolidation: :reconsolidate
         )
 
       cleanup_prepared_source(prepared_path)

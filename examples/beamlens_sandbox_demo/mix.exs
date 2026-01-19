@@ -24,8 +24,7 @@ defmodule BeamlensSandboxDemo.MixProject do
   defp deps do
     [
       {:sandbox, path: "../../"},
-      {:beamlens,
-       github: "nshkrdotcom/beamlens", ref: "380bd8f44a94569b173ba0418f1402365153065e"},
+      {:beamlens, github: "beamlens/beamlens"},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false}
     ]

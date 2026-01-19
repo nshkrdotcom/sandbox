@@ -422,35 +422,47 @@ defmodule SnakepitSandboxDemo.CLI do
   defp default_operator_max_iterations(:anomaly), do: @anomaly_operator_max_iterations
   defp default_operator_max_iterations(_mode), do: @default_operator_max_iterations
 
-  defp mock_puck_client_for(:anomaly) do
-    Beamlens.Testing.mock_client([
-      %Beamlens.Operator.Tools.TakeSnapshot{intent: "take_snapshot"},
-      %Beamlens.Operator.Tools.SendNotification{
-        intent: "send_notification",
-        type: "session_spike",
-        severity: "warning",
-        summary: "session count elevated",
-        snapshot_ids: ["latest"]
-      },
-      %Beamlens.Operator.Tools.SetState{
-        intent: "set_state",
-        state: :warning,
-        reason: "session count above threshold"
-      },
-      %Beamlens.Operator.Tools.Done{intent: "done"}
-    ])
-  end
+  defp mock_puck_client_for(mode) do
+    responses =
+      case mode do
+        :anomaly ->
+          [
+            %Beamlens.Operator.Tools.TakeSnapshot{intent: "take_snapshot"},
+            %Beamlens.Operator.Tools.SendNotification{
+              intent: "send_notification",
+              type: "session_spike",
+              severity: "warning",
+              summary: "session count elevated",
+              snapshot_ids: ["latest"]
+            },
+            %Beamlens.Operator.Tools.SetState{
+              intent: "set_state",
+              state: :warning,
+              reason: "session count above threshold"
+            },
+            %Beamlens.Operator.Tools.Done{intent: "done"}
+          ]
 
-  defp mock_puck_client_for(_mode) do
-    Beamlens.Testing.mock_client([
-      %Beamlens.Operator.Tools.TakeSnapshot{intent: "take_snapshot"},
-      %Beamlens.Operator.Tools.SetState{
-        intent: "set_state",
-        state: :healthy,
-        reason: "session count normal"
-      },
-      %Beamlens.Operator.Tools.Done{intent: "done"}
-    ])
+        _ ->
+          [
+            %Beamlens.Operator.Tools.TakeSnapshot{intent: "take_snapshot"},
+            %Beamlens.Operator.Tools.SetState{
+              intent: "set_state",
+              state: :healthy,
+              reason: "session count normal"
+            },
+            %Beamlens.Operator.Tools.Done{intent: "done"}
+          ]
+      end
+
+    {:ok, queue} = Agent.start_link(fn -> responses end)
+
+    backend_config = %{
+      queue: queue,
+      default_response: %Beamlens.Operator.Tools.Done{intent: "done"}
+    }
+
+    Puck.Client.new({SnakepitSandboxDemo.MockBackend, backend_config})
   end
 
   defp check_ollama_available do
