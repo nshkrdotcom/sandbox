@@ -72,12 +72,41 @@ defmodule SnakepitSandboxDemo.MockBackend do
 
   defp latest_snapshot_id(_messages), do: nil
 
-  defp snapshot_id_from_message(%Message{content: content}) when is_binary(content) do
-    case Jason.decode(content) do
-      {:ok, %{"id" => id, "captured_at" => _}} -> id
-      _ -> nil
-    end
+  defp snapshot_id_from_message(%Message{content: content}) do
+    snapshot_id_from_content(content)
+  end
+
+  defp snapshot_id_from_message(%{content: content}) do
+    snapshot_id_from_content(content)
   end
 
   defp snapshot_id_from_message(_message), do: nil
+
+  defp snapshot_id_from_content(content) do
+    case normalize_content(content) do
+      nil ->
+        nil
+
+      text ->
+        case Jason.decode(text) do
+          {:ok, %{"id" => id, "captured_at" => _}} -> id
+          _ -> nil
+        end
+    end
+  end
+
+  defp normalize_content(content) when is_binary(content), do: content
+
+  defp normalize_content(content) when is_list(content) do
+    content
+    |> Enum.map(&extract_text/1)
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.join("\n")
+  end
+
+  defp normalize_content(_content), do: nil
+
+  defp extract_text(%{type: :text, text: text}) when is_binary(text), do: text
+  defp extract_text(%{type: "text", text: text}) when is_binary(text), do: text
+  defp extract_text(_), do: ""
 end

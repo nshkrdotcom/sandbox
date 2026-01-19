@@ -31,7 +31,9 @@ defmodule SnakepitSandboxDemo.SandboxRunner do
   def start_snakepit(sandbox_id, opts \\ []) do
     configure_snakepit_env(opts)
 
-    with {:ok, app_module} <- SandboxModules.resolve_module(sandbox_id, Snakepit.Application),
+    with :ok <- maybe_start_grpc_apps(opts),
+         :ok <- maybe_configure_adapter_module(sandbox_id, opts),
+         {:ok, app_module} <- SandboxModules.resolve_module(sandbox_id, Snakepit.Application),
          {:ok, session_store} <-
            SandboxModules.resolve_module(sandbox_id, Snakepit.Bridge.SessionStore),
          {:ok, start_result} <- Sandbox.run(sandbox_id, fn -> start_snakepit_app(app_module) end),
@@ -85,12 +87,55 @@ defmodule SnakepitSandboxDemo.SandboxRunner do
     env = %{
       pooling_enabled: Keyword.get(opts, :pooling_enabled, false),
       enable_otlp?: Keyword.get(opts, :enable_otlp?, false),
-      cleanup_on_stop: Keyword.get(opts, :cleanup_on_stop, true)
+      cleanup_on_stop: Keyword.get(opts, :cleanup_on_stop, true),
+      auto_install_python_deps: Keyword.get(opts, :auto_install_python_deps, false)
     }
 
     Enum.each(env, fn {key, value} ->
       Application.put_env(:snakepit, key, value)
     end)
+
+    maybe_put_env(:bootstrap_project_root, Keyword.get(opts, :bootstrap_project_root))
+    maybe_put_python_env_dir(Keyword.get(opts, :python_env_dir))
+  end
+
+  defp maybe_put_env(_key, nil), do: :ok
+  defp maybe_put_env(key, value), do: Application.put_env(:snakepit, key, value)
+
+  defp maybe_put_python_env_dir(nil), do: :ok
+
+  defp maybe_put_python_env_dir(env_dir) do
+    existing = Application.get_env(:snakepit, :python_packages, [])
+    Application.put_env(:snakepit, :python_packages, Keyword.merge(existing, env_dir: env_dir))
+  end
+
+  defp maybe_start_grpc_apps(opts) do
+    if Keyword.get(opts, :pooling_enabled, false) do
+      case Application.ensure_all_started(:grpc) do
+        {:ok, _} -> :ok
+        {:error, reason} -> {:error, {:grpc_dependency_start_failed, reason}}
+      end
+    else
+      :ok
+    end
+  end
+
+  defp maybe_configure_adapter_module(sandbox_id, opts) do
+    if Keyword.get(opts, :pooling_enabled, false) do
+      adapter_source =
+        Keyword.get(opts, :adapter_module, Snakepit.Adapters.GRPCPython)
+
+      case SandboxModules.resolve_module(sandbox_id, adapter_source) do
+        {:ok, adapter_module} ->
+          Application.put_env(:snakepit, :adapter_module, adapter_module)
+          :ok
+
+        {:error, reason} ->
+          {:error, {:adapter_module_unresolved, reason}}
+      end
+    else
+      :ok
+    end
   end
 
   defp prepare_sandbox_source(source_path) do

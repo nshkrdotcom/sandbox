@@ -24,3 +24,6 @@ sandbox-*.tar
 
 # Repomix configuration files
 repomix*.xml
+
+# Local Snakepit Python env created by run_real*
+/.snakepit_python/

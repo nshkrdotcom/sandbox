@@ -34,7 +34,7 @@ defmodule SnakepitSandboxDemo.CLITest do
 
   test "run uses mock client and reports healthy" do
     puck_client =
-      Beamlens.Testing.mock_client([
+      build_mock_client([
         %TakeSnapshot{intent: "take_snapshot"},
         %SetState{intent: "set_state", state: :healthy, reason: "session count normal"},
         %Done{intent: "done"}
@@ -48,13 +48,13 @@ defmodule SnakepitSandboxDemo.CLITest do
 
   test "run_anomaly uses mock client and reports warning" do
     puck_client =
-      Beamlens.Testing.mock_client([
+      build_mock_client([
         %TakeSnapshot{intent: "take_snapshot"},
         %SendNotification{
           intent: "send_notification",
           type: "session_spike",
           summary: "session count elevated",
-          severity: :warning,
+          severity: "warning",
           snapshot_ids: ["latest"]
         },
         %SetState{intent: "set_state", state: :warning, reason: "session count above threshold"},
@@ -71,5 +71,16 @@ defmodule SnakepitSandboxDemo.CLITest do
                  seed_sessions: 12
                ]
              ])
+  end
+
+  defp build_mock_client(responses) do
+    {:ok, queue} = Agent.start_link(fn -> responses end)
+
+    backend_config = %{
+      queue: queue,
+      default_response: %Done{intent: "done"}
+    }
+
+    Puck.Client.new({SnakepitSandboxDemo.MockBackend, backend_config})
   end
 end

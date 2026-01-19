@@ -30,12 +30,28 @@ defmodule SnakepitSandboxDemo.CLI do
     run_mode(:normal, opts)
   end
 
+  def run_real do
+    run_real([])
+  end
+
+  def run_real(opts) when is_list(opts) do
+    run_mode(:real, opts)
+  end
+
   def run_anomaly do
     run_anomaly([])
   end
 
   def run_anomaly(opts) when is_list(opts) do
     run_mode(:anomaly, opts)
+  end
+
+  def run_real_anomaly do
+    run_real_anomaly([])
+  end
+
+  def run_real_anomaly(opts) when is_list(opts) do
+    run_mode(:real_anomaly, opts)
   end
 
   defp run_mode(mode, opts) do
@@ -47,10 +63,11 @@ defmodule SnakepitSandboxDemo.CLI do
 
     result =
       try do
-        with {:ok, operator_opts} <- build_operator_opts(opts, mode),
+        with {:ok, {operator_mode, run_opts}} <- normalize_run_mode(mode, opts),
+             {:ok, operator_opts} <- build_operator_opts(run_opts, operator_mode),
              {:ok, _info} <- SandboxRunner.create_sandbox(sandbox_id, sandbox_path),
-             :ok <- SandboxRunner.start_snakepit(sandbox_id, opts),
-             {:ok, _created} <- maybe_seed_sessions(mode, sandbox_id, opts),
+             :ok <- SandboxRunner.start_snakepit(sandbox_id, run_opts),
+             {:ok, _created} <- maybe_seed_sessions(operator_mode, sandbox_id, run_opts),
              :ok <- Store.set_sandbox_id(sandbox_id),
              :ok <- validate_skill_snapshot(SandboxSkill),
              {:ok, operator_summary} <-
@@ -249,12 +266,7 @@ defmodule SnakepitSandboxDemo.CLI do
   end
 
   defp build_client_context_from_env(mode) do
-    provider =
-      System.get_env("BEAMLENS_DEMO_PROVIDER") ||
-        System.get_env("BEAMLENS_TEST_PROVIDER") ||
-        "mock"
-
-    provider = String.downcase(provider)
+    provider = demo_provider()
 
     model_override =
       System.get_env("BEAMLENS_DEMO_MODEL") ||
@@ -395,6 +407,71 @@ defmodule SnakepitSandboxDemo.CLI do
       {:error, reason} ->
         {:error, "Ollama not available: #{reason}"}
     end
+  end
+
+  defp normalize_run_mode(:real, opts) do
+    normalize_real_mode(opts, :normal)
+  end
+
+  defp normalize_run_mode(:real_anomaly, opts) do
+    normalize_real_mode(opts, :anomaly)
+  end
+
+  defp normalize_run_mode(mode, opts), do: {:ok, {mode, opts}}
+
+  defp normalize_real_mode(opts, operator_mode) do
+    with :ok <- ensure_live_provider(opts) do
+      pooling_enabled = Keyword.get(opts, :pooling_enabled, true)
+      auto_install_python_deps = Keyword.get(opts, :auto_install_python_deps, true)
+
+      opts =
+        opts
+        |> Keyword.put(:pooling_enabled, pooling_enabled)
+        |> Keyword.put(:auto_install_python_deps, auto_install_python_deps)
+        |> maybe_put_bootstrap_project_root()
+        |> maybe_put_python_env_dir(auto_install_python_deps)
+
+      {:ok, {operator_mode, opts}}
+    end
+  end
+
+  defp maybe_put_bootstrap_project_root(opts) do
+    Keyword.put_new(opts, :bootstrap_project_root, File.cwd!())
+  end
+
+  defp maybe_put_python_env_dir(opts, true) do
+    Keyword.put_new(opts, :python_env_dir, default_python_env_dir(opts))
+  end
+
+  defp maybe_put_python_env_dir(opts, false), do: opts
+
+  defp default_python_env_dir(opts) do
+    root = Keyword.get(opts, :bootstrap_project_root, File.cwd!())
+    Path.expand(Path.join(root, ".snakepit_python"))
+  end
+
+  defp ensure_live_provider(opts) do
+    if Keyword.has_key?(opts, :client_registry) or Keyword.has_key?(opts, :puck_client) do
+      :ok
+    else
+      case demo_provider() do
+        "mock" ->
+          {:error,
+           "Real demo requires a live provider. Set BEAMLENS_DEMO_PROVIDER to anthropic, openai, google-ai, gemini-ai, or ollama (or pass client_registry/puck_client)."}
+
+        _ ->
+          :ok
+      end
+    end
+  end
+
+  defp demo_provider do
+    provider =
+      System.get_env("BEAMLENS_DEMO_PROVIDER") ||
+        System.get_env("BEAMLENS_TEST_PROVIDER") ||
+        "mock"
+
+    String.downcase(provider)
   end
 
   defp operator_context_for(opts, :normal) do
