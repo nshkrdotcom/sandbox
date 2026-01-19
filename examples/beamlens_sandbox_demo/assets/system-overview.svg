@@ -1,0 +1,50 @@
+<svg viewBox="0 0 720 480" xmlns="http://www.w3.org/2000/svg" style="max-width: 720px; font-family: system-ui, -apple-system, sans-serif;">
+  <defs>
+    <filter id="shadow" x="-2%" y="-2%" width="104%" height="104%">
+      <feDropShadow dx="1" dy="1" stdDeviation="2" flood-opacity="0.1"/>
+    </filter>
+  </defs>
+
+  <!-- Host Application Container -->
+  <rect x="10" y="10" width="700" height="460" rx="8" fill="#f8fafc" stroke="#e2e8f0" stroke-width="2" filter="url(#shadow)"/>
+  <text x="360" y="36" text-anchor="middle" font-size="14" font-weight="600" fill="#1e293b">Host Application</text>
+  <text x="360" y="52" text-anchor="middle" font-size="11" fill="#64748b">(BeamlensSandboxDemo.Application)</text>
+
+  <!-- Demo.Supervisor Container -->
+  <rect x="30" y="70" width="660" height="380" rx="6" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.5"/>
+  <text x="360" y="94" text-anchor="middle" font-size="13" font-weight="600" fill="#334155">Demo.Supervisor</text>
+  <text x="360" y="110" text-anchor="middle" font-size="10" fill="#94a3b8">(strategy: one_for_one)</text>
+
+  <!-- Beamlens Container -->
+  <rect x="50" y="125" width="620" height="140" rx="5" fill="#eff6ff" stroke="#3b82f6" stroke-width="1.5"/>
+  <text x="360" y="148" text-anchor="middle" font-size="12" font-weight="600" fill="#1e40af">Beamlens</text>
+
+  <!-- Coordinator Box -->
+  <rect x="70" y="160" width="160" height="90" rx="4" fill="#ffffff" stroke="#60a5fa" stroke-width="1"/>
+  <text x="150" y="182" text-anchor="middle" font-size="11" font-weight="600" fill="#1e40af">Coordinator</text>
+  <text x="150" y="200" text-anchor="middle" font-size="9" fill="#64748b">Routes requests</text>
+  <text x="150" y="214" text-anchor="middle" font-size="9" fill="#64748b">Manages insights</text>
+
+  <!-- Operator.Supervisor Box -->
+  <rect x="260" y="160" width="390" height="90" rx="4" fill="#ffffff" stroke="#60a5fa" stroke-width="1"/>
+  <text x="455" y="182" text-anchor="middle" font-size="11" font-weight="600" fill="#1e40af">Operator.Supervisor</text>
+  <text x="455" y="200" text-anchor="middle" font-size="9" fill="#64748b">Spawns operators on demand:</text>
+  <text x="455" y="216" text-anchor="middle" font-size="9" fill="#475569">Demo.SandboxSkill operator</text>
+  <text x="455" y="232" text-anchor="middle" font-size="9" fill="#94a3b8">(other skills...)</text>
+
+  <!-- Sandbox Container -->
+  <rect x="50" y="280" width="620" height="160" rx="5" fill="#f0fdf4" stroke="#22c55e" stroke-width="1.5"/>
+  <text x="360" y="302" text-anchor="middle" font-size="12" font-weight="600" fill="#166534">Sandbox (created at runtime)</text>
+  <text x="120" y="320" font-size="9" fill="#64748b">sandbox_id: "demo-1"</text>
+  <text x="280" y="320" font-size="9" fill="#64748b">status: :running</text>
+
+  <!-- Transformed Supervisor Box -->
+  <rect x="70" y="332" width="580" height="95" rx="4" fill="#ffffff" stroke="#4ade80" stroke-width="1"/>
+  <text x="360" y="352" text-anchor="middle" font-size="11" font-weight="600" fill="#166534">Transformed Supervisor</text>
+  <text x="360" y="366" text-anchor="middle" font-size="9" fill="#64748b">(Sandbox_demo1_abc123_DemoSandbox.Supervisor)</text>
+
+  <!-- Transformed Worker Box -->
+  <rect x="90" y="378" width="540" height="40" rx="3" fill="#fefce8" stroke="#facc15" stroke-width="1"/>
+  <text x="360" y="394" text-anchor="middle" font-size="10" font-weight="600" fill="#854d0e">Transformed Worker</text>
+  <text x="360" y="408" text-anchor="middle" font-size="9" fill="#64748b">def answer(), do: 41 → 42  (hot-reload)</text>
+</svg>

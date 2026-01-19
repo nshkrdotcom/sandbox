@@ -85,6 +85,20 @@ defmodule Sandbox.Config do
     end
   end
 
+  def module_version_debug_cycles? do
+    env =
+      System.get_env("SANDBOX_DEBUG_CYCLES") ||
+        System.get_env("SANDBOX_LOG_CYCLES")
+
+    case env do
+      "1" -> true
+      "true" -> true
+      "yes" -> true
+      "on" -> true
+      _ -> Application.get_env(:sandbox, :debug_cycles, false)
+    end
+  end
+
   defp normalize_override(nil), do: %{}
   defp normalize_override(map) when is_map(map), do: map
 

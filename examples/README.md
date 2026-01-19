@@ -11,6 +11,7 @@ The examples progress in complexity:
 | `simple_sandbox.ex` | Basic | Core concepts: supervisors, GenServers, hot-reload |
 | `plugin_example.ex` | Intermediate | Building a plugin system with lifecycle management |
 | `beamlens_sandbox_demo/` | Advanced | Full application integrating Sandbox with Beamlens AI monitoring |
+| `snakepit_sandbox_demo/` | Advanced | Runs Snakepit inside a Sandbox and monitors it with Beamlens |
 
 Each example is designed to be studied in order, building on concepts from the previous one.
 

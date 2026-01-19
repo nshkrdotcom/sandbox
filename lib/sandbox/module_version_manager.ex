@@ -380,7 +380,7 @@ defmodule Sandbox.ModuleVersionManager do
         # Clean up old versions if we exceed the limit
         cleanup_old_versions(table_name, sandbox_id, module)
 
-        Logger.info("Registered module version with enhanced tracking",
+        Logger.debug("Registered module version with enhanced tracking",
           sandbox_id: sandbox_id,
           module: module,
           version: next_version,
@@ -392,12 +392,7 @@ defmodule Sandbox.ModuleVersionManager do
         {:ok, next_version}
 
       {:error, circular_deps} ->
-        Logger.error("Circular dependency detected during registration",
-          sandbox_id: sandbox_id,
-          module: module,
-          circular_dependencies: circular_deps
-        )
-
+        log_circular_dependency("registration", sandbox_id, module, circular_deps)
         {:error, {:circular_dependency, circular_deps}}
     end
   end
@@ -955,12 +950,28 @@ defmodule Sandbox.ModuleVersionManager do
         {:ok, :no_cycles}
 
       cycles ->
-        Logger.warning("Circular dependencies detected", cycles: cycles)
+        log_circular_cycles(cycles)
         {:error, {:circular_dependency, cycles}}
     end
   rescue
     error ->
       {:error, {:cycle_detection_failed, error}}
+  end
+
+  defp log_circular_cycles(cycles) do
+    if Config.module_version_debug_cycles?() do
+      Logger.info("Circular dependencies detected", cycles: cycles)
+    end
+  end
+
+  defp log_circular_dependency(context, sandbox_id, module, cycles) do
+    if Config.module_version_debug_cycles?() do
+      Logger.info("Circular dependency detected during #{context}",
+        sandbox_id: sandbox_id,
+        module: module,
+        circular_dependencies: cycles
+      )
+    end
   end
 
   defp do_parallel_reload(table_name, sandbox_id, modules, opts) do

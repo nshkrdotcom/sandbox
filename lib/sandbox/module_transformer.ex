@@ -39,6 +39,7 @@ defmodule Sandbox.ModuleTransformer do
     # Create globally unique namespace to prevent conflicts
     unique_namespace = create_unique_namespace(sanitized_id)
     namespace_prefix = Keyword.get(opts, :namespace_prefix, unique_namespace)
+    transform_modules = Keyword.get(opts, :transform_modules)
 
     try do
       # Parse the source code into AST
@@ -47,9 +48,10 @@ defmodule Sandbox.ModuleTransformer do
           case validate_defmodule_blocks(ast) do
             :ok ->
               {transformed_ast, module_mapping} =
-                transform_ast(ast, namespace_prefix, preserve_stdlib)
+                transform_ast(ast, namespace_prefix, preserve_stdlib, transform_modules)
 
-              transformed_code = Macro.to_string(transformed_ast)
+              cleaned_ast = remove_unused_aliases(transformed_ast)
+              transformed_code = Macro.to_string(cleaned_ast)
               {:ok, transformed_code, module_mapping}
 
             {:error, line} ->
@@ -63,6 +65,30 @@ defmodule Sandbox.ModuleTransformer do
       error ->
         {:error, {:transformation_error, error}}
     end
+  end
+
+  @doc """
+  Extracts module names defined in a source file.
+  """
+  def extract_module_names(source_code) when is_binary(source_code) do
+    case Code.string_to_quoted(source_code) do
+      {:ok, ast} ->
+        {_ast, names} =
+          Macro.prewalk(ast, [], fn
+            {:defmodule, _meta, [module_alias, _]} = node, acc ->
+              {node, [module_alias_to_atom(module_alias) | acc]}
+
+            node, acc ->
+              {node, acc}
+          end)
+
+        {:ok, names |> Enum.reverse() |> Enum.uniq()}
+
+      {:error, _reason} ->
+        {:error, :parse_error}
+    end
+  rescue
+    _ -> {:error, :parse_error}
   end
 
   @doc """
@@ -216,26 +242,165 @@ defmodule Sandbox.ModuleTransformer do
 
   # Private functions
 
-  defp transform_ast(ast, namespace_prefix, preserve_stdlib) do
+  defp transform_ast(ast, namespace_prefix, preserve_stdlib, transform_modules) do
     module_mapping = %{}
 
     {transformed_ast, final_mapping} =
       Macro.prewalk(ast, module_mapping, fn node, mapping ->
-        transform_node(node, namespace_prefix, preserve_stdlib, mapping)
+        transform_node(node, namespace_prefix, preserve_stdlib, transform_modules, mapping)
       end)
 
     {transformed_ast, final_mapping}
   end
 
+  defp remove_unused_aliases(ast) do
+    used_aliases = collect_used_aliases(ast)
+
+    Macro.postwalk(ast, fn
+      {:alias, _meta, _args} = node ->
+        case prune_alias_node(node, used_aliases) do
+          {:__block__, _, []} = empty_block -> empty_block
+          updated_node -> updated_node
+        end
+
+      node ->
+        node
+    end)
+  end
+
+  defp prune_alias_node(
+         {:alias, meta, [{{:., dot_meta, [module_alias, :{}]}, alias_meta, alias_children}]},
+         used_aliases
+       ) do
+    kept_children = filter_alias_children(alias_children, used_aliases)
+
+    if kept_children == [] do
+      {:__block__, meta, []}
+    else
+      {:alias, meta, [{{:., dot_meta, [module_alias, :{}]}, alias_meta, kept_children}]}
+    end
+  end
+
+  defp prune_alias_node(
+         {:alias, meta,
+          [{{:., dot_meta, [module_alias, :{}]}, alias_meta, alias_children}, opts]},
+         used_aliases
+       ) do
+    kept_children = filter_alias_children(alias_children, used_aliases)
+
+    if kept_children == [] do
+      {:__block__, meta, []}
+    else
+      {:alias, meta, [{{:., dot_meta, [module_alias, :{}]}, alias_meta, kept_children}, opts]}
+    end
+  end
+
+  defp prune_alias_node({:alias, meta, [module_alias]}, used_aliases) do
+    if alias_name_used?(module_alias, used_aliases) do
+      {:alias, meta, [module_alias]}
+    else
+      {:__block__, meta, []}
+    end
+  end
+
+  defp prune_alias_node({:alias, meta, [module_alias, opts]}, used_aliases) do
+    as = Keyword.get(opts, :as)
+
+    if alias_name_used?(module_alias, used_aliases, as) do
+      {:alias, meta, [module_alias, opts]}
+    else
+      {:__block__, meta, []}
+    end
+  end
+
+  defp prune_alias_node(node, _used_aliases), do: node
+
+  defp filter_alias_children(alias_children, used_aliases) do
+    Enum.filter(alias_children, fn child ->
+      alias_name_used?(child, used_aliases)
+    end)
+  end
+
+  defp alias_name_used?(module_alias, used_aliases, as_override \\ nil) do
+    alias_name =
+      case as_override do
+        nil ->
+          module_alias_to_atom(module_alias) |> alias_name_from_module()
+
+        override when is_atom(override) ->
+          override
+
+        override when is_binary(override) ->
+          String.to_atom(override)
+
+        override when is_tuple(override) ->
+          module_alias_to_atom(override) |> alias_name_from_module()
+      end
+
+    MapSet.member?(used_aliases, alias_name)
+  end
+
+  defp alias_name_from_module(module_atom) when is_atom(module_atom) do
+    module_atom
+    |> Atom.to_string()
+    |> String.trim_leading("Elixir.")
+    |> String.split(".")
+    |> List.last()
+    |> String.to_atom()
+  end
+
+  defp collect_used_aliases(ast) do
+    collect_used_aliases(ast, MapSet.new())
+  end
+
+  defp collect_used_aliases({:alias, _meta, _args}, used_aliases), do: used_aliases
+
+  defp collect_used_aliases({:defmodule, _meta, [_module_alias, do_block]}, used_aliases) do
+    collect_used_aliases(do_block, used_aliases)
+  end
+
+  defp collect_used_aliases({:__aliases__, _meta, [first | _]}, used_aliases)
+       when is_atom(first) do
+    MapSet.put(used_aliases, first)
+  end
+
+  defp collect_used_aliases(list, used_aliases) when is_list(list) do
+    Enum.reduce(list, used_aliases, &collect_used_aliases/2)
+  end
+
+  defp collect_used_aliases(tuple, used_aliases) when is_tuple(tuple) do
+    tuple
+    |> Tuple.to_list()
+    |> Enum.reduce(used_aliases, &collect_used_aliases/2)
+  end
+
+  defp collect_used_aliases(map, used_aliases) when is_map(map) do
+    Enum.reduce(map, used_aliases, fn {key, value}, acc ->
+      acc
+      |> collect_used_aliases(key)
+      |> collect_used_aliases(value)
+    end)
+  end
+
+  defp collect_used_aliases(_other, used_aliases), do: used_aliases
+
   defp transform_node(
          {:defmodule, meta, [module_alias, do_block]},
          namespace_prefix,
          preserve_stdlib,
+         transform_modules,
          mapping
        ) do
     original_name = module_alias_to_atom(module_alias)
 
-    if preserve_stdlib and is_stdlib_module?(to_string(original_name)) do
+    if already_namespaced?(original_name, namespace_prefix) or
+         (preserve_stdlib and is_stdlib_module?(to_string(original_name))) or
+         not should_transform?(
+           original_name,
+           namespace_prefix,
+           preserve_stdlib,
+           transform_modules
+         ) do
       # Don't transform standard library modules
       {{:defmodule, meta, [module_alias, do_block]}, mapping}
     else
@@ -249,14 +414,52 @@ defmodule Sandbox.ModuleTransformer do
   end
 
   defp transform_node(
-         {:alias, meta, [module_alias | rest]},
+         {:alias, meta, [{{:., dot_meta, [module_alias, :{}]}, alias_meta, alias_children}]},
          namespace_prefix,
          preserve_stdlib,
+         transform_modules,
          mapping
        ) do
     original_name = module_alias_to_atom(module_alias)
 
-    if preserve_stdlib and is_stdlib_module?(to_string(original_name)) do
+    if already_namespaced?(original_name, namespace_prefix) or
+         (preserve_stdlib and is_stdlib_module?(to_string(original_name))) or
+         not should_transform_prefix?(
+           original_name,
+           namespace_prefix,
+           preserve_stdlib,
+           transform_modules
+         ) do
+      {{:alias, meta, [{{:., dot_meta, [module_alias, :{}]}, alias_meta, alias_children}]},
+       mapping}
+    else
+      transformed_name = :"#{namespace_prefix}_#{original_name}"
+      transformed_alias = atom_to_module_alias(transformed_name)
+
+      new_mapping = Map.put(mapping, original_name, transformed_name)
+
+      {{:alias, meta, [{{:., dot_meta, [transformed_alias, :{}]}, alias_meta, alias_children}]},
+       new_mapping}
+    end
+  end
+
+  defp transform_node(
+         {:alias, meta, [module_alias | rest]},
+         namespace_prefix,
+         preserve_stdlib,
+         transform_modules,
+         mapping
+       ) do
+    original_name = module_alias_to_atom(module_alias)
+
+    if already_namespaced?(original_name, namespace_prefix) or
+         (preserve_stdlib and is_stdlib_module?(to_string(original_name))) or
+         not should_transform?(
+           original_name,
+           namespace_prefix,
+           preserve_stdlib,
+           transform_modules
+         ) do
       # Don't transform standard library module aliases
       {{:alias, meta, [module_alias | rest]}, mapping}
     else
@@ -270,9 +473,38 @@ defmodule Sandbox.ModuleTransformer do
   end
 
   defp transform_node(
+         {:__aliases__, _meta, _parts} = module_alias,
+         namespace_prefix,
+         preserve_stdlib,
+         transform_modules,
+         mapping
+       ) do
+    original_name = module_alias_to_atom(module_alias)
+
+    if already_namespaced?(original_name, namespace_prefix) or
+         (preserve_stdlib and is_stdlib_module?(to_string(original_name))) or
+         not should_transform?(
+           original_name,
+           namespace_prefix,
+           preserve_stdlib,
+           transform_modules
+         ) do
+      {module_alias, mapping}
+    else
+      transformed_name = :"#{namespace_prefix}_#{original_name}"
+      transformed_alias = atom_to_module_alias(transformed_name)
+
+      new_mapping = Map.put(mapping, original_name, transformed_name)
+
+      {transformed_alias, new_mapping}
+    end
+  end
+
+  defp transform_node(
          {{:., meta1, [module_alias, function]}, meta2, args},
          namespace_prefix,
          preserve_stdlib,
+         transform_modules,
          mapping
        ) do
     # Transform module function calls like Module.function()
@@ -280,7 +512,14 @@ defmodule Sandbox.ModuleTransformer do
       {:__aliases__, _, _} ->
         original_name = module_alias_to_atom(module_alias)
 
-        if preserve_stdlib and is_stdlib_module?(to_string(original_name)) do
+        if already_namespaced?(original_name, namespace_prefix) or
+             (preserve_stdlib and is_stdlib_module?(to_string(original_name))) or
+             not should_transform?(
+               original_name,
+               namespace_prefix,
+               preserve_stdlib,
+               transform_modules
+             ) do
           # Don't transform standard library module calls
           {{{:., meta1, [module_alias, function]}, meta2, args}, mapping}
         else
@@ -298,7 +537,7 @@ defmodule Sandbox.ModuleTransformer do
     end
   end
 
-  defp transform_node(node, _namespace_prefix, _preserve_stdlib, mapping) do
+  defp transform_node(node, _namespace_prefix, _preserve_stdlib, _transform_modules, mapping) do
     # For all other nodes, leave unchanged
     {node, mapping}
   end
@@ -365,6 +604,8 @@ defmodule Sandbox.ModuleTransformer do
       "Map",
       "List",
       "Keyword",
+      "Atom",
+      "MapSet",
       "Tuple",
       "Integer",
       "Float",
@@ -379,6 +620,12 @@ defmodule Sandbox.ModuleTransformer do
       "Mix",
       "ExUnit",
       "IO",
+      "Date",
+      "DateTime",
+      "NaiveDateTime",
+      "Time",
+      "Calendar",
+      "Calendar.ISO",
       "Supervisor",
       "Registry",
       "DynamicSupervisor",
@@ -390,6 +637,49 @@ defmodule Sandbox.ModuleTransformer do
     Enum.any?(stdlib_prefixes, fn prefix ->
       String.starts_with?(module_str, prefix)
     end)
+  end
+
+  defp already_namespaced?(module_name, namespace_prefix) do
+    module_name
+    |> to_string()
+    |> String.starts_with?("#{namespace_prefix}_")
+  end
+
+  defp should_transform?(module_name, namespace_prefix, preserve_stdlib, transform_modules) do
+    cond do
+      already_namespaced?(module_name, namespace_prefix) ->
+        false
+
+      preserve_stdlib and is_stdlib_module?(to_string(module_name)) ->
+        false
+
+      match?(%MapSet{}, transform_modules) ->
+        MapSet.member?(transform_modules, module_name)
+
+      true ->
+        true
+    end
+  end
+
+  defp should_transform_prefix?(module_name, namespace_prefix, preserve_stdlib, transform_modules) do
+    cond do
+      already_namespaced?(module_name, namespace_prefix) ->
+        false
+
+      preserve_stdlib and is_stdlib_module?(to_string(module_name)) ->
+        false
+
+      match?(%MapSet{}, transform_modules) ->
+        base = to_string(module_name) <> "."
+
+        MapSet.member?(transform_modules, module_name) or
+          Enum.any?(transform_modules, fn mod ->
+            String.starts_with?(to_string(mod), base)
+          end)
+
+      true ->
+        true
+    end
   end
 
   @doc """

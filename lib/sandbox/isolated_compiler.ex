@@ -906,9 +906,9 @@ defmodule Sandbox.IsolatedCompiler do
   end
 
   defp resolve_elixirc_files(sandbox_path, opts) do
-    case Keyword.get(opts, :source_files, []) do
-      [] -> Path.wildcard(Path.join([sandbox_path, "lib", "**", "*.ex"]))
-      source_files -> Enum.map(source_files, &Path.expand(&1, sandbox_path))
+    case Keyword.fetch(opts, :source_files) do
+      :error -> Path.wildcard(Path.join([sandbox_path, "lib", "**", "*.ex"]))
+      {:ok, source_files} -> Enum.map(source_files, &Path.expand(&1, sandbox_path))
     end
   end
 

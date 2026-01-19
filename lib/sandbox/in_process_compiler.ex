@@ -34,13 +34,29 @@ defmodule Sandbox.InProcessCompiler do
 
   defp do_compile_in_process(source_path, output_path, opts) do
     original_cwd = get_original_cwd()
+    original_compiler_options = Code.compiler_options()
+    ignore_consolidated = Keyword.get(opts, :ignore_already_consolidated, false)
 
     try do
       File.mkdir_p!(output_path)
+
+      if ignore_consolidated do
+        Code.compiler_options(ignore_already_consolidated: true)
+      end
+
       source_files = pick_source_files(source_path, opts)
       Logger.debug("In-process compiler found #{length(source_files)} files in #{source_path}")
 
-      result = compile_source_files(source_files, source_path, output_path, opts)
+      source_files_specified = Keyword.has_key?(opts, :source_files)
+
+      result =
+        compile_source_files(
+          source_files,
+          source_path,
+          output_path,
+          Keyword.put(opts, :source_files_specified, source_files_specified)
+        )
+
       restore_cwd(original_cwd)
       result
     rescue
@@ -49,6 +65,8 @@ defmodule Sandbox.InProcessCompiler do
         Logger.error("In-process compilation failed: #{inspect(error)}")
         Logger.error("Stacktrace: #{inspect(__STACKTRACE__)}")
         {:error, {:compilation_failed, error}}
+    after
+      Code.compiler_options(original_compiler_options)
     end
   end
 
@@ -66,13 +84,17 @@ defmodule Sandbox.InProcessCompiler do
   end
 
   defp compile_source_files([], source_path, output_path, opts) do
-    root_files = Path.wildcard(Path.join(source_path, "*.ex"))
-
-    if Enum.empty?(root_files) do
+    if Keyword.get(opts, :source_files_specified, false) do
       {:ok, %{beam_files: [], warnings: [], modules: []}}
     else
-      compile_result = compile_files(root_files, output_path, opts)
-      handle_compile_result(compile_result, output_path)
+      root_files = Path.wildcard(Path.join(source_path, "*.ex"))
+
+      if Enum.empty?(root_files) do
+        {:ok, %{beam_files: [], warnings: [], modules: []}}
+      else
+        compile_result = compile_files(root_files, output_path, opts)
+        handle_compile_result(compile_result, output_path)
+      end
     end
   end
 
@@ -162,9 +184,9 @@ defmodule Sandbox.InProcessCompiler do
   end
 
   defp pick_source_files(source_path, opts) do
-    case Keyword.get(opts, :source_files, []) do
-      [] -> find_source_files(source_path)
-      files -> normalize_source_files(source_path, files)
+    case Keyword.fetch(opts, :source_files) do
+      :error -> find_source_files(source_path)
+      {:ok, files} -> normalize_source_files(source_path, files)
     end
   end
 

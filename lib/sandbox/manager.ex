@@ -21,6 +21,13 @@ defmodule Sandbox.Manager do
   alias Sandbox.ProcessIsolator
   alias Sandbox.VirtualCodeTable
 
+  @default_source_exclude_dirs [
+    "_build",
+    "deps",
+    "test",
+    "lib/mix"
+  ]
+
   # Public API
 
   def start_link(opts \\ []) do
@@ -49,6 +56,8 @@ defmodule Sandbox.Manager do
     * `:communication_mode` - Inter-sandbox communication (:none, :message_passing, :shared_ets, default: :message_passing)
     * `:auto_reload` - Enable automatic file watching (default: false)
     * `:state_migration_handler` - Custom state migration function
+    * `:source_exclude_dirs` - Directories to ignore when transforming/compiling source
+    * `:protocol_consolidation` - :reconsolidate or :none (default: :reconsolidate)
 
   ## Examples
 
@@ -2477,6 +2486,7 @@ defmodule Sandbox.Manager do
            VirtualCodeTable.create_table(sandbox_id, table_prefix: table_prefixes.virtual_code),
          :ok <- setup_code_paths(sandbox_id, compile_info),
          :ok <- load_sandbox_modules(sandbox_id, compile_info, services, table_prefixes),
+         :ok <- maybe_reconsolidate_protocols(compile_info, opts),
          :ok <- load_sandbox_application(app_name, sandbox_id, compile_info.app_file),
          {:ok, app_pid, supervisor_pid} <-
            start_application_and_supervisor(sandbox_id, app_name, supervisor_module, opts) do
@@ -2621,18 +2631,28 @@ defmodule Sandbox.Manager do
 
   defp compile_sandbox_isolated(sandbox_id, sandbox_path, app_name, opts, table_prefixes) do
     # Step 1: Apply module transformation to source files
-    case apply_module_transformation(sandbox_id, sandbox_path, table_prefixes) do
+    case apply_module_transformation(sandbox_id, sandbox_path, table_prefixes, opts) do
       {:ok, transformation_info} ->
+        protocol_consolidation = Keyword.get(opts, :protocol_consolidation, :reconsolidate)
+
         compile_opts = [
           timeout: Keyword.get(opts, :compile_timeout, 30_000),
           validate_beams: Keyword.get(opts, :validate_beams, true),
           compiler: :elixirc,
           in_process: true,
+          parallel: true,
           env: %{
             "MIX_ENV" => "dev",
             "MIX_TARGET" => "host"
           }
         ]
+
+        compile_opts =
+          compile_opts
+          |> maybe_add_source_files(transformation_info)
+          |> maybe_ignore_consolidated_protocols(protocol_consolidation)
+          |> apply_resource_limits(Keyword.get(opts, :resource_limits, %{}))
+          |> add_security_opts(Keyword.get(opts, :security_profile, %{}))
 
         Logger.info("Compiling sandbox #{sandbox_id} in isolation with module transformation",
           sandbox_path: sandbox_path,
@@ -2677,7 +2697,7 @@ defmodule Sandbox.Manager do
     end
   end
 
-  defp apply_module_transformation(sandbox_id, sandbox_path, table_prefixes) do
+  defp apply_module_transformation(sandbox_id, sandbox_path, table_prefixes, opts) do
     sanitized_id = ModuleTransformer.sanitize_sandbox_id(sandbox_id)
     namespace_prefix = ModuleTransformer.create_unique_namespace(sanitized_id)
 
@@ -2687,14 +2707,21 @@ defmodule Sandbox.Manager do
     )
 
     try do
-      # Find all .ex files in the sandbox
-      ex_files = Path.wildcard(Path.join([sandbox_path, "**", "*.ex"]))
+      # Find all .ex files in the sandbox, excluding dev/test tooling
+      ex_files =
+        sandbox_path
+        |> then(&Path.join([&1, "**", "*.ex"]))
+        |> Path.wildcard()
+        |> filter_source_files(sandbox_path, opts)
+
+      transform_modules = collect_transform_modules(ex_files)
 
       transformation_info = %{
         sandbox_id: sandbox_id,
         module_mappings: %{},
         transformed_files: [],
         total_files: length(ex_files),
+        source_files: ex_files,
         namespace_prefix: namespace_prefix
       }
 
@@ -2706,7 +2733,13 @@ defmodule Sandbox.Manager do
       # Transform each file
       result =
         Enum.reduce_while(ex_files, {:ok, transformation_info}, fn file_path, {:ok, acc_info} ->
-          case transform_source_file(sandbox_id, file_path, table_prefixes, namespace_prefix) do
+          case transform_source_file(
+                 sandbox_id,
+                 file_path,
+                 table_prefixes,
+                 namespace_prefix,
+                 transform_modules
+               ) do
             {:ok, file_mappings} ->
               updated_info = %{
                 acc_info
@@ -2748,7 +2781,43 @@ defmodule Sandbox.Manager do
     end
   end
 
-  defp transform_source_file(sandbox_id, file_path, table_prefixes, namespace_prefix) do
+  defp add_security_opts(compile_opts, security_profile) when is_map(security_profile) do
+    restricted_modules = Map.get(security_profile, :restricted_modules, [])
+    allowed_operations = Map.get(security_profile, :allowed_operations, [])
+
+    security_scan =
+      case {restricted_modules, allowed_operations} do
+        {[], [:all]} -> false
+        _ -> true
+      end
+
+    compile_opts
+    |> Keyword.put(:restricted_modules, restricted_modules)
+    |> Keyword.put(:allowed_operations, allowed_operations)
+    |> Keyword.put(:security_scan, security_scan)
+  end
+
+  defp add_security_opts(compile_opts, _security_profile), do: compile_opts
+
+  defp apply_resource_limits(compile_opts, limits) when is_map(limits) do
+    compile_opts
+    |> maybe_put(:memory_limit, Map.get(limits, :max_memory))
+    |> maybe_put(:cpu_limit, Map.get(limits, :max_cpu_percentage))
+    |> maybe_put(:max_processes, Map.get(limits, :max_processes))
+  end
+
+  defp apply_resource_limits(compile_opts, _limits), do: compile_opts
+
+  defp maybe_put(opts, _key, nil), do: opts
+  defp maybe_put(opts, key, value), do: Keyword.put(opts, key, value)
+
+  defp transform_source_file(
+         sandbox_id,
+         file_path,
+         table_prefixes,
+         namespace_prefix,
+         transform_modules
+       ) do
     # Read the source file
     case File.read(file_path) do
       {:ok, source_code} ->
@@ -2757,7 +2826,8 @@ defmodule Sandbox.Manager do
           file_path,
           source_code,
           table_prefixes,
-          namespace_prefix
+          namespace_prefix,
+          transform_modules
         )
 
       {:error, read_error} ->
@@ -2773,10 +2843,12 @@ defmodule Sandbox.Manager do
          file_path,
          source_code,
          table_prefixes,
-         namespace_prefix
+         namespace_prefix,
+         transform_modules
        ) do
     case ModuleTransformer.transform_source(source_code, sandbox_id,
-           namespace_prefix: namespace_prefix
+           namespace_prefix: namespace_prefix,
+           transform_modules: transform_modules
          ) do
       {:ok, transformed_code, module_mappings} ->
         write_transformed_source(
@@ -2815,6 +2887,71 @@ defmodule Sandbox.Manager do
     end
   end
 
+  defp collect_transform_modules(ex_files) do
+    Enum.reduce(ex_files, MapSet.new(), fn file_path, acc ->
+      case File.read(file_path) do
+        {:ok, source_code} ->
+          case ModuleTransformer.extract_module_names(source_code) do
+            {:ok, modules} ->
+              Enum.reduce(modules, acc, fn module, set -> MapSet.put(set, module) end)
+
+            {:error, _} ->
+              acc
+          end
+
+        {:error, _} ->
+          acc
+      end
+    end)
+  end
+
+  defp filter_source_files(ex_files, sandbox_path, opts) do
+    exclude_dirs = Keyword.get(opts, :source_exclude_dirs, @default_source_exclude_dirs)
+
+    if exclude_dirs == [] do
+      ex_files
+    else
+      normalized_excludes = normalize_source_excludes(exclude_dirs, sandbox_path)
+
+      ex_files
+      |> Enum.reject(fn file_path -> path_excluded?(file_path, normalized_excludes) end)
+    end
+  end
+
+  defp normalize_source_excludes(exclude_dirs, sandbox_path) do
+    base = Path.expand(sandbox_path)
+
+    exclude_dirs
+    |> Enum.map(&to_string/1)
+    |> Enum.map(fn dir ->
+      if Path.type(dir) == :absolute do
+        Path.expand(dir)
+      else
+        Path.expand(Path.join(base, dir))
+      end
+    end)
+  end
+
+  defp path_excluded?(path, exclude_dirs) do
+    expanded = Path.expand(path)
+
+    Enum.any?(exclude_dirs, fn excluded ->
+      expanded == excluded or String.starts_with?(expanded, excluded <> "/")
+    end)
+  end
+
+  defp maybe_add_source_files(compile_opts, %{source_files: source_files}) do
+    Keyword.put(compile_opts, :source_files, source_files)
+  end
+
+  defp maybe_add_source_files(compile_opts, _), do: compile_opts
+
+  defp maybe_ignore_consolidated_protocols(compile_opts, :reconsolidate) do
+    Keyword.put(compile_opts, :ignore_already_consolidated, true)
+  end
+
+  defp maybe_ignore_consolidated_protocols(compile_opts, _), do: compile_opts
+
   defp load_sandbox_modules(sandbox_id, compile_info, services, table_prefixes) do
     compile_info.beam_files
     |> Enum.reduce_while(:ok, fn beam_file, :ok ->
@@ -2823,6 +2960,72 @@ defmodule Sandbox.Manager do
         {:error, reason} -> {:halt, {:error, reason}}
       end
     end)
+  end
+
+  defp maybe_reconsolidate_protocols(compile_info, opts) do
+    case Keyword.get(opts, :protocol_consolidation, :reconsolidate) do
+      :reconsolidate -> reconsolidate_protocols(compile_info)
+      _ -> :ok
+    end
+  end
+
+  defp reconsolidate_protocols(compile_info) do
+    ebin_dirs =
+      compile_info.beam_files
+      |> Enum.map(&Path.dirname/1)
+      |> Enum.uniq()
+
+    protocol_paths = protocol_search_paths(ebin_dirs)
+    protocols = Protocol.extract_protocols(protocol_paths)
+
+    Enum.each(protocols, fn protocol ->
+      if Protocol.consolidated?(protocol) do
+        sandbox_impls = Protocol.extract_impls(protocol, ebin_dirs)
+
+        if sandbox_impls != [] do
+          impls =
+            Protocol.extract_impls(protocol, protocol_paths)
+            |> Enum.uniq()
+
+          case Protocol.consolidate(protocol, impls) do
+            {:ok, binary} ->
+              load_consolidated_protocol(protocol, binary)
+
+            {:error, _reason} ->
+              :ok
+          end
+        end
+      end
+    end)
+
+    :ok
+  end
+
+  defp protocol_search_paths(ebin_dirs) do
+    code_paths =
+      :code.get_path()
+      |> Enum.map(&to_string/1)
+      |> Enum.filter(&File.dir?/1)
+
+    Enum.uniq(code_paths ++ ebin_dirs)
+  end
+
+  defp load_consolidated_protocol(protocol, binary) do
+    beam_path = :code.which(protocol)
+    beam_path = if is_list(beam_path), do: beam_path, else: ~c"nofile"
+
+    case :code.load_binary(protocol, beam_path, binary) do
+      {:module, ^protocol} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("Failed to load consolidated protocol",
+          protocol: protocol,
+          reason: inspect(reason)
+        )
+
+        :ok
+    end
   end
 
   defp load_beam_file(sandbox_id, beam_file, services, table_prefixes) do
@@ -2840,11 +3043,31 @@ defmodule Sandbox.Manager do
              module,
              beam_data,
              table_prefixes.virtual_code
-           ),
-         {:ok, version} <-
-           register_module_version(sandbox_id, module, beam_data, services.module_version_manager) do
-      Logger.debug("Loaded module #{module} version #{version} for sandbox #{sandbox_id}")
-      :ok
+           ) do
+      case register_module_version(
+             sandbox_id,
+             module,
+             beam_data,
+             services.module_version_manager
+           ) do
+        {:ok, version} ->
+          Logger.debug("Loaded module #{module} version #{version} for sandbox #{sandbox_id}")
+          :ok
+
+        {:error, {:circular_dependency, deps}} ->
+          if Config.module_version_debug_cycles?() do
+            Logger.info("Skipping module version tracking due to circular deps",
+              sandbox_id: sandbox_id,
+              module: module,
+              circular_dependencies: deps
+            )
+          end
+
+          :ok
+
+        {:error, reason} ->
+          {:error, reason}
+      end
     else
       {:error, {:module_already_loaded, ^module}} ->
         :ok
@@ -2883,6 +3106,7 @@ defmodule Sandbox.Manager do
            server: server
          ) do
       {:ok, version} -> {:ok, version}
+      {:error, {:circular_dependency, deps}} -> {:error, {:circular_dependency, deps}}
       {:error, reason} -> {:error, {:version_registration_failed, module, reason}}
     end
   end
